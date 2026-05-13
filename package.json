@@ -1,0 +1,28 @@
+{
+  "name": "cryptoattack-realtime-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "start": "pnpm --filter @cryptoattack/server start",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "db:migrate": "pnpm --filter @cryptoattack/server db:migrate",
+    "db:status": "pnpm --filter @cryptoattack/server db:status",
+    "db:reset": "pnpm --filter @cryptoattack/server db:reset",
+    "db:backfill": "pnpm --filter @cryptoattack/server db:backfill",
+    "backtest": "pnpm --filter @cryptoattack/server backtest --"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.16",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}
