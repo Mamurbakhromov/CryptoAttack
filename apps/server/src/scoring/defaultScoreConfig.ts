@@ -2,6 +2,7 @@ import type { ScoreConfig } from './types.js';
 
 export const defaultScoreConfig: ScoreConfig = {
   version: 'rule-v1',
+  engine: 'rule-v1',
   description: 'Transparent rule-based Bull/Bear scoring v1',
   windows: [
     { minutes: 5, halfLifeMinutes: 2.5, maxAgeMinutes: 15 },
@@ -53,9 +54,92 @@ export const defaultScoreConfig: ScoreConfig = {
   ]
 };
 
+export const flowV2ScoreConfig: ScoreConfig = {
+  version: 'flow-v2',
+  engine: 'flow-v2',
+  description: 'Intraday flow scoring v2 for 2-4h spot-led trade pressure',
+  windows: [
+    { minutes: 5, halfLifeMinutes: 5, maxAgeMinutes: 30 },
+    { minutes: 15, halfLifeMinutes: 15, maxAgeMinutes: 75 },
+    { minutes: 60, halfLifeMinutes: 45, maxAgeMinutes: 180 },
+    { minutes: 240, halfLifeMinutes: 90, maxAgeMinutes: 480 },
+    { minutes: 1_440, halfLifeMinutes: 240, maxAgeMinutes: 1_440 }
+  ],
+  sideSaturation: 100,
+  materialChange: {
+    minNetDelta: 7,
+    minSideDelta: 10,
+    minConfidenceDelta: 15
+  },
+  confidence: {
+    base: 40,
+    evidenceCountCap: 0,
+    feedDiversityCap: 0,
+    signalDiversityCap: 0,
+    exchangeBreadthCap: 0,
+    parserPenalty: 15,
+    conflictPenalty: 25,
+    stalePenalty: 0,
+    singleFeedPenalty: 0,
+    burstPenalty: 0
+  },
+  burst: {
+    threshold: 3,
+    maxBonus: 0
+  },
+  rules: [
+    {
+      ruleKey: 'flow_spot_family',
+      feedKeys: ['all_spot_top_buy_5m', 'all_spot_top_sell_5m', 'all_spot_per'],
+      side: 'confidence',
+      baseWeight: 41,
+      scale: 'fixed',
+      maxContribution: 41,
+      reasonTemplate: 'Spot flow family'
+    },
+    {
+      ruleKey: 'flow_derivatives_family',
+      feedKeys: ['all_derivatives_top_buy_5m', 'all_derivatives_top_sell_5m', 'all_derivatives_per'],
+      side: 'confidence',
+      baseWeight: 29,
+      scale: 'fixed',
+      maxContribution: 29,
+      reasonTemplate: 'Derivatives flow family'
+    },
+    {
+      ruleKey: 'flow_top_oi_family',
+      feedKeys: ['top_oi_gainers_60m', 'top_oi_losers_60m'],
+      side: 'confidence',
+      baseWeight: 12,
+      scale: 'fixed',
+      maxContribution: 12,
+      reasonTemplate: 'Top OI family'
+    },
+    {
+      ruleKey: 'flow_big_activity_family',
+      feedKeys: ['cex_track', 'flows_alert'],
+      side: 'confidence',
+      baseWeight: 18,
+      scale: 'fixed',
+      maxContribution: 18,
+      reasonTemplate: 'Big activity family'
+    }
+  ]
+};
+
 export function scoreConfigForVersion(version: string): ScoreConfig {
+  if (version === flowV2ScoreConfig.version) {
+    return {
+      ...flowV2ScoreConfig,
+      rules: flowV2ScoreConfig.rules.map((rule) => ({ ...rule, feedKeys: [...rule.feedKeys] })),
+      windows: flowV2ScoreConfig.windows.map((window) => ({ ...window }))
+    };
+  }
+
   return {
     ...defaultScoreConfig,
+    rules: defaultScoreConfig.rules.map((rule) => ({ ...rule, feedKeys: [...rule.feedKeys] })),
+    windows: defaultScoreConfig.windows.map((window) => ({ ...window })),
     version
   };
 }

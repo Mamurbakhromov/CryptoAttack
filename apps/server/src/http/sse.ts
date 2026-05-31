@@ -130,6 +130,10 @@ export class SseHub {
     this.broadcast('storage-status', event);
   }
 
+  broadcastSnapshot(): void {
+    this.broadcast('snapshot', this.store.getSnapshot());
+  }
+
   private broadcast(eventName: string, data: unknown): void {
     for (const client of this.clients.values()) {
       this.send(client, eventName, data);

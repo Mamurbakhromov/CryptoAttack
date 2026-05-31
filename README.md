@@ -99,7 +99,7 @@ PRICE_COLLECTION_INTERVAL_MS=60000
 PRICE_COLLECTION_ACTIVE_COIN_TTL_MS=86400000
 FORWARD_RETURN_HORIZONS_MINUTES=5,15,60,240,1440
 SCORES_ENABLED=false
-SCORES_VERSION=rule-v1
+SCORES_VERSION=flow-v2
 SCORES_RECALC_INTERVAL_MS=30000
 SCORES_RECOMPUTE_DEBOUNCE_MS=1000
 SCORES_WINDOWS_MINUTES=5,15,60,240,1440
@@ -131,12 +131,12 @@ Scores require durable storage. Set:
 DATABASE_STORAGE_ENABLED=true
 PRICE_COLLECTION_ENABLED=true
 SCORES_ENABLED=true
-SCORES_VERSION=rule-v1
+SCORES_VERSION=flow-v2
 SCORES_WINDOWS_MINUTES=5,15,60,240,1440
 FORWARD_RETURN_HORIZONS_MINUTES=5,15,60,240,1440
 ```
 
-`PRICE_COLLECTION_ENABLED=true` lets the forward-return worker label historical outcomes for backtesting. Live scoring remains rule-based and uses only events available at score time.
+`PRICE_COLLECTION_ENABLED=true` lets the forward-return worker label historical outcomes for backtesting. Live scoring defaults to `flow-v2`, an intraday spot-led flow model for 2-4 hour trade pressure. The legacy transparent rule engine remains available with `SCORES_VERSION=rule-v1`.
 
 ## Local TimescaleDB
 

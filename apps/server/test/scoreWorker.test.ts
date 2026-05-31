@@ -53,6 +53,34 @@ describe('ScoreWorker', () => {
     expect(worker.getStatus()).toMatchObject({ state: 'degraded', failed: 1, lastError: 'score write failed' });
     expect(warn).toHaveBeenCalled();
   });
+
+  it('clears pending coins and runtime counters for full data reset', async () => {
+    const repository = fakeRepository();
+    const worker = new ScoreWorker(repository, {
+      enabled: true,
+      intervalMs: 30_000,
+      debounceMs: 1_000,
+      maxQueueDepth: 100,
+      batchCoins: 25,
+      windowsMinutes: [15],
+      config: defaultScoreConfig,
+      logger: { warn: vi.fn() } as never,
+      now: () => new Date('2026-01-01T00:15:00.000Z')
+    });
+
+    worker.enqueueEvents([makeEvent('BTC'), makeEvent('ETH')]);
+    const reset = worker.resetRuntimeState();
+
+    expect(reset).toEqual({ clearedPendingCoins: 2 });
+    expect(worker.getStatus()).toMatchObject({
+      pendingCoinCount: 0,
+      lastTriggeredAt: null,
+      processed: 0,
+      written: 0,
+      writtenEvidence: 0,
+      latestScoreTs: null
+    });
+  });
 });
 
 function fakeRepository(overrides: Partial<ScoreRepository> = {}): ScoreRepository {

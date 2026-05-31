@@ -100,7 +100,7 @@ PRICE_COLLECTION_ENABLED=false
 FORWARD_RETURN_HORIZONS_MINUTES=5,15,60,240,1440
 SCORES_ENABLED=false
 SCORES_RECALC_INTERVAL_MS=30000
-SCORES_VERSION=rule-v1
+SCORES_VERSION=flow-v2
 SCORES_WINDOWS_MINUTES=5,15,60,240,1440
 ```
 
@@ -110,6 +110,7 @@ Behavior:
 - If `DATABASE_STORAGE_ENABLED=true`, startup verifies Postgres connectivity. After startup, async ingestion failures do not block in-memory dashboard updates or SSE delivery.
 - `DATABASE_MIGRATIONS_ON_START=false` is safer for production. Migrations should usually run via an explicit command.
 - `SCORES_ENABLED=false` lets durable storage ship before scoring.
+- `SCORES_VERSION=flow-v2` uses the intraday spot-led flow model. Set `SCORES_VERSION=rule-v1` to run the legacy rule-based scorer.
 
 ## SQL Schema Overview
 

@@ -11,7 +11,7 @@ import { loadConfig, type AppConfig } from './config.js';
 import { CryptoAttackClient } from './cryptoattack/client.js';
 import { BacktestRepository } from './db/backtestRepository.js';
 import { disabledDurableIngestionStatus, DurableIngestionQueue, durableIngestionOptionsFromConfig } from './db/durableIngestion.js';
-import { EventIngestionRepository } from './db/eventRepository.js';
+import { EventIngestionRepository, EventMaintenanceRepository } from './db/eventRepository.js';
 import { MarketDataRepository } from './db/marketDataRepository.js';
 import { runMigrations } from './db/migrations.js';
 import { resolveDefaultMigrationsDir } from './db/paths.js';
@@ -19,6 +19,7 @@ import { closePostgresPool, createPostgresPool, verifyPostgresConnection } from 
 import { ScoreRepository } from './db/scoreRepository.js';
 import { StorageHealthService } from './db/storageHealth.js';
 import { applyTimescalePolicies } from './db/timescalePolicies.js';
+import { TopSpotHistoryRepository } from './db/topSpotHistoryRepository.js';
 import { SpotPerformanceService } from './exchanges/spotPerformance.js';
 import { ExchangeSymbolCache } from './exchanges/symbolCache.js';
 import { EventStore } from './events/eventStore.js';
@@ -41,29 +42,43 @@ const logger = createLogger();
 const config = loadConfig();
 const startupWarnings = buildStartupWarnings(config);
 for (const warning of startupWarnings) logger.warn(warning, 'Startup configuration warning');
-const postgresPool = createPostgresPool(config.database);
+let postgresPool = createPostgresPool(config.database);
 const migrationsDir = resolveDefaultMigrationsDir();
 
 if (postgresPool) {
-  await verifyPostgresConnection(postgresPool);
-  if (config.database.migrationsOnStart) {
-    await runMigrations(postgresPool, migrationsDir);
-  }
   try {
-    const policyResult = await applyTimescalePolicies(postgresPool, config.database.timescale);
-    logger.info(policyResult, 'Timescale retention and compression policies applied');
+    await verifyPostgresConnection(postgresPool, config.database.statementTimeoutMs);
+    if (config.database.migrationsOnStart) {
+      await runMigrations(postgresPool, migrationsDir);
+    }
+    try {
+      const policyResult = await applyTimescalePolicies(postgresPool, config.database.timescale);
+      logger.info(policyResult, 'Timescale retention and compression policies applied');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      startupWarnings.push({ code: 'timescale_policy_apply_failed', severity: 'warning', message: 'Timescale retention or compression policy application failed.' });
+      logger.warn({ error: message }, 'Timescale policy application failed');
+    }
+    logger.info(
+      {
+        storageEnabled: true,
+        migrationsOnStart: config.database.migrationsOnStart
+      },
+      'Database storage initialized'
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    startupWarnings.push({ code: 'timescale_policy_apply_failed', severity: 'warning', message: 'Timescale retention or compression policy application failed.' });
-    logger.warn({ error: message }, 'Timescale policy application failed');
+    startupWarnings.push({
+      code: 'database_unavailable',
+      severity: 'critical',
+      message: 'Database storage was enabled but the database was unavailable at startup. Storage-backed features are disabled until restart.'
+    });
+    logger.error({ error: message }, 'Database storage unavailable; continuing with storage disabled');
+    await closePostgresPool(postgresPool).catch((closeError) => {
+      logger.warn({ error: closeError instanceof Error ? closeError.message : String(closeError) }, 'Failed to close unavailable database pool');
+    });
+    postgresPool = null;
   }
-  logger.info(
-    {
-      storageEnabled: true,
-      migrationsOnStart: config.database.migrationsOnStart
-    },
-    'Database storage initialized'
-  );
 } else {
   logger.info({ storageEnabled: false }, 'Database storage disabled');
 }
@@ -76,9 +91,11 @@ const store = new EventStore({
 });
 const appendRawEvent = createRawEventAppender(config, logger);
 const scoreRepository = postgresPool ? new ScoreRepository(postgresPool) : null;
+const eventMaintenance = postgresPool ? new EventMaintenanceRepository(postgresPool) : null;
 const backtestRepository = postgresPool ? new BacktestRepository(postgresPool) : null;
 const backtestService = backtestRepository ? new BacktestService(backtestRepository) : null;
 const marketDataRepository = postgresPool ? new MarketDataRepository(postgresPool) : null;
+const topSpotHistoryRepository = postgresPool ? new TopSpotHistoryRepository(postgresPool) : null;
 const storageHealthService = postgresPool ? new StorageHealthService(postgresPool, migrationsDir) : null;
 const symbolCache = new ExchangeSymbolCache({
   enabled: config.exchangeSymbolCacheEnabled,
@@ -192,8 +209,14 @@ await registerHttpRoutes(app, {
   sseHub,
   symbolCache,
   spotPerformance,
+  eventMaintenance,
   scoreRepository,
   backtestService,
+  topSpotHistoryRepository,
+  resetRuntimeState: () => ({
+    clearedPendingScoreCoins: scoreWorker?.resetRuntimeState().clearedPendingCoins ?? 0,
+    clearedActivePriceCoins: priceCollectionService?.resetRuntimeState().clearedActiveCoins ?? 0
+  }),
   getStorageStatus: () => durableIngestion?.getStatus() ?? disabledDurableIngestionStatus(),
   getWorkerStatus,
   getDatabaseHealth: () => storageHealthService?.getHealth() ?? null,
@@ -221,7 +244,7 @@ logger.info(
     port: config.serverPort,
     mockMode: config.mockCryptoAttack,
     authEnabled: config.dashboardAuthEnabled,
-    storageEnabled: config.database.storageEnabled
+    storageEnabled: postgresPool !== null
   },
   'CryptoAttack Realtime Dashboard backend started'
 );

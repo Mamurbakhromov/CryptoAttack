@@ -20,6 +20,7 @@ export interface ScoreRuleConfig {
 
 export interface ScoreConfig {
   version: string;
+  engine?: 'rule-v1' | 'flow-v2';
   description: string;
   windows: ScoreWindowConfig[];
   sideSaturation: number;

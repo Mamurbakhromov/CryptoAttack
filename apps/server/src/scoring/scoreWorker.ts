@@ -47,6 +47,10 @@ export interface ScoreUpdateSseItem {
   evidenceCount: number;
   scoreHash: string;
   evidenceHash: string;
+  scoreState?: string | null;
+  tradeAction?: string | null;
+  componentScores?: Record<string, unknown> | null;
+  flowBreakdown?: unknown[] | null;
 }
 
 export interface ScoreUpdateSseEvent {
@@ -238,6 +242,29 @@ export class ScoreWorker {
     };
   }
 
+  resetRuntimeState(): { clearedPendingCoins: number } {
+    const clearedPendingCoins = this.pendingCoins.size;
+    this.pendingCoins.clear();
+    if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    this.debounceTimer = null;
+    this.lastTriggeredAt = null;
+    this.lastTriggerReason = null;
+    this.lastRunStartedAt = null;
+    this.lastRunCompletedAt = null;
+    this.lastSuccessAt = null;
+    this.lastFailureAt = null;
+    this.lastError = null;
+    this.processed = 0;
+    this.written = 0;
+    this.skipped = 0;
+    this.failed = 0;
+    this.writtenEvidence = 0;
+    this.latestScoreTs = null;
+    this.runDurationsMs.length = 0;
+    if (this.options.enabled && this.state !== 'stopped') this.state = 'running';
+    return { clearedPendingCoins };
+  }
+
   private scheduleDebouncedRun(): void {
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
     this.debounceTimer = setTimeout(() => {
@@ -288,8 +315,27 @@ function scoreResultToSseItem(result: ReturnType<typeof calculateScores>[number]
     eventCount: result.eventCount,
     evidenceCount: result.evidenceCount,
     scoreHash: result.scoreHash,
-    evidenceHash: result.evidenceHash
+    evidenceHash: result.evidenceHash,
+    scoreState: stringPayloadValue(result.payload, 'scoreState'),
+    tradeAction: stringPayloadValue(result.payload, 'tradeAction'),
+    componentScores: recordPayloadValue(result.payload, 'componentScores'),
+    flowBreakdown: arrayPayloadValue(result.payload, 'flowBreakdown')
   };
+}
+
+function stringPayloadValue(payload: Record<string, unknown>, key: string): string | null {
+  const value = payload[key];
+  return typeof value === 'string' && value ? value : null;
+}
+
+function recordPayloadValue(payload: Record<string, unknown>, key: string): Record<string, unknown> | null {
+  const value = payload[key];
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function arrayPayloadValue(payload: Record<string, unknown>, key: string): unknown[] | null {
+  const value = payload[key];
+  return Array.isArray(value) ? value : null;
 }
 
 export function scoreWorkerOptionsFromConfig(config: AppConfig, logger: AppLogger): ScoreWorkerOptions {

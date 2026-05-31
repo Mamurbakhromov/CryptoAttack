@@ -27,6 +27,10 @@ interface StatusBarProps {
   exchangeFilter: ExchangeFilter;
   marketFilter: MarketFilter;
   theme: 'dark' | 'light';
+  eventClearState: 'idle' | 'clearing' | 'success' | 'error';
+  eventClearMessage: string | null;
+  dataResetState: 'idle' | 'resetting' | 'success' | 'error';
+  dataResetMessage: string | null;
   onTogglePause: () => void;
   onToggleSound: () => void;
   onToggleNotifications: () => void;
@@ -34,11 +38,17 @@ interface StatusBarProps {
   onExchangeFilterChange: (filter: ExchangeFilter) => void;
   onMarketFilterChange: (filter: MarketFilter) => void;
   onToggleTheme: () => void;
+  onClearEventData: () => void;
+  onResetAllStoredData: () => void;
 }
 
 export function StatusBar(props: StatusBarProps) {
   const [classificationMenuOpen, setClassificationMenuOpen] = useState(false);
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const classificationMenuRef = useRef<HTMLDivElement | null>(null);
+  const clearConfirmRef = useRef<HTMLDivElement | null>(null);
+  const resetConfirmRef = useRef<HTMLDivElement | null>(null);
   const main = props.status?.sockets.main;
   const fast = props.status?.sockets.fast;
 
@@ -54,6 +64,32 @@ export function StatusBar(props: StatusBarProps) {
     document.addEventListener('pointerdown', closeOnOutsidePointerDown);
     return () => document.removeEventListener('pointerdown', closeOnOutsidePointerDown);
   }, [classificationMenuOpen]);
+
+  useEffect(() => {
+    if (!clearConfirmOpen) return;
+
+    const closeOnOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && clearConfirmRef.current?.contains(target)) return;
+      setClearConfirmOpen(false);
+    };
+
+    document.addEventListener('pointerdown', closeOnOutsidePointerDown);
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointerDown);
+  }, [clearConfirmOpen]);
+
+  useEffect(() => {
+    if (!resetConfirmOpen) return;
+
+    const closeOnOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && resetConfirmRef.current?.contains(target)) return;
+      setResetConfirmOpen(false);
+    };
+
+    document.addEventListener('pointerdown', closeOnOutsidePointerDown);
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointerDown);
+  }, [resetConfirmOpen]);
 
   return (
     <header className="status-bar sticky top-0 z-20 px-4 py-2 md:px-6">
@@ -78,6 +114,82 @@ export function StatusBar(props: StatusBarProps) {
           <button className="control-button" type="button" onClick={props.onToggleNotifications}>
             Notify {props.notificationsEnabled ? 'on' : 'off'}
           </button>
+          <div className="event-clear-control" ref={clearConfirmRef}>
+            <button
+              className={`control-button event-clear-trigger ${props.eventClearState === 'error' ? 'danger' : ''}`}
+              type="button"
+              disabled={props.eventClearState === 'clearing'}
+              aria-haspopup="dialog"
+              aria-expanded={clearConfirmOpen}
+              onClick={() => setClearConfirmOpen((value) => !value)}
+            >
+              {props.eventClearState === 'clearing' ? 'Clearing events' : 'Clear events'}
+            </button>
+            {clearConfirmOpen ? (
+              <div className="event-clear-confirm" role="dialog" aria-label="Confirm clear event data">
+                <strong>Clear event data?</strong>
+                <span>Live buffers and stored event tables will be cleared. Score tables are not deleted.</span>
+                <div className="event-clear-actions">
+                  <button className="control-button" type="button" onClick={() => setClearConfirmOpen(false)}>
+                    Cancel
+                  </button>
+                  <button
+                    className="control-button danger"
+                    type="button"
+                    onClick={() => {
+                      setClearConfirmOpen(false);
+                      props.onClearEventData();
+                    }}
+                  >
+                    Clear event data
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+          {props.eventClearMessage ? (
+            <span className={`event-clear-message ${props.eventClearState}`} aria-live="polite">
+              {props.eventClearMessage}
+            </span>
+          ) : null}
+          <div className="event-clear-control" ref={resetConfirmRef}>
+            <button
+              className="control-button danger"
+              type="button"
+              disabled={props.dataResetState === 'resetting'}
+              aria-haspopup="dialog"
+              aria-expanded={resetConfirmOpen}
+              onClick={() => setResetConfirmOpen((value) => !value)}
+            >
+              {props.dataResetState === 'resetting' ? 'Resetting data' : 'Reset all data'}
+            </button>
+            {resetConfirmOpen ? (
+              <div className="event-clear-confirm reset-data-confirm" role="dialog" aria-label="Confirm reset all stored data">
+                <strong>Reset all stored data?</strong>
+                <span>Deletes events, scores, popup evidence, market labels, and the raw event log. Fresh websocket data will start filling again.</span>
+                <div className="event-clear-actions">
+                  <button className="control-button" type="button" onClick={() => setResetConfirmOpen(false)}>
+                    Cancel
+                  </button>
+                  <button
+                    className="control-button danger"
+                    type="button"
+                    onClick={() => {
+                      setResetConfirmOpen(false);
+                      props.onResetAllStoredData();
+                    }}
+                  >
+                    Reset stored data
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+          {props.dataResetMessage ? (
+            <span className={`event-clear-message ${props.dataResetState === 'resetting' ? 'idle' : props.dataResetState}`} aria-live="polite">
+              {props.dataResetMessage}
+            </span>
+          ) : null}
           <div className="status-filter-control" ref={classificationMenuRef}>
             <button
               className={`control-button classification-trigger ${props.classificationFilter.length || props.exchangeFilter.length || props.marketFilter.length ? 'active' : ''}`}

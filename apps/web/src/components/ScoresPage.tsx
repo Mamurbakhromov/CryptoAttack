@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 
-import { fetchScoreDetail, fetchScoreEvidence, fetchScoreMarketRegime, fetchScoresCurrent, fetchScoresTop, fetchScoreTimeline, fetchScoringConfigCurrent } from '../api/sse';
+import { fetchScoreDetail, fetchScoreMarketRegime, fetchScoresCurrent, fetchScoresTop, fetchScoringConfigCurrent } from '../api/sse';
 import { getCoinClassificationClasses, getCoinClassificationFilterLabel, isCoinClassificationFilterActive, matchesCoinClassificationFilter, type CoinClassificationFilter } from '../coinClassification';
 import { getExchangeFilterLabel, getMarketFilterLabel, isExchangeFilterActive, isMarketFilterActive, type ExchangeFilter, type MarketFilter } from '../exchangeFilters';
-import type { ApiStatus, DashboardSnapshot, ExchangeMarket, NormalizedEvent, ScoreDetailResponse, ScoreEvidenceItem, ScoreEvidenceResponse, ScoreEvidenceSide, ScoreListQuery, ScoreMarketRegime, ScoreMarketRegimeResponse, ScoreSnapshotSseEvent, ScoreSummary, ScoreTimelinePoint, ScoreTimelineResponse, ScoreUpdateSseEvent, ScoresListResponse, ScoreWorkerStatus, StorageStatusResponse } from '../types';
+import type { ApiStatus, DashboardSnapshot, ExchangeMarket, ScoreDetailResponse, ScoreFlowBreakdownItem, ScoreListQuery, ScoreMarketRegime, ScoreMarketRegimeResponse, ScoreSnapshotSseEvent, ScoreSummary, ScoreUpdateSseEvent, ScoresListResponse, ScoreWorkerStatus, StorageStatusResponse } from '../types';
 import { ExchangeChips, getCoinExchangeChips, type ExchangeAvailabilityByMarket, type ExchangeChipInfo } from './ExchangeChips';
 import { formatDateTime, formatTime } from './format';
 
@@ -20,14 +20,17 @@ interface ScoresPageProps {
   storageStatus: StorageStatusResponse | null;
 }
 
-const defaultScoreWindows = [5, 15, 60, 240, 1_440];
-const confidenceOptions = [0, 25, 50, 75];
+const allowedScoreWindows = [5, 15];
+const defaultScoreWindows = allowedScoreWindows;
+const confidenceOptions = [50, 75];
+const scoreLeaderboardLimit = 5;
+const risingCandidateLimit = 50;
 
 export function ScoresPage(props: ScoresPageProps) {
   const [selectedWindowMinutes, setSelectedWindowMinutes] = useState<number | null>(null);
   const [configuredScoreWindows, setConfiguredScoreWindows] = useState<number[] | null>(null);
-  const [minConfidence, setMinConfidence] = useState(0);
-  const [changedSince, setChangedSince] = useState<string | null>(null);
+  const [minConfidence, setMinConfidence] = useState(50);
+  const [changedSince, setChangedSince] = useState<string | null>(() => new Date(Date.now() - 15 * 60_000).toISOString());
   const [topBull, setTopBull] = useState<ScoresListResponse | null>(null);
   const [topBear, setTopBear] = useState<ScoresListResponse | null>(null);
   const [currentScores, setCurrentScores] = useState<ScoresListResponse | null>(null);
@@ -37,7 +40,7 @@ export function ScoresPage(props: ScoresPageProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const serverScoreWindows = configuredScoreWindows ?? props.storageStatus?.workers.scores.windowsMinutes ?? props.status?.workers?.scores.windowsMinutes ?? null;
-  const scoreWindows = useMemo(() => normalizeScoreWindows(serverScoreWindows ?? defaultScoreWindows), [serverScoreWindows]);
+  const scoreWindows = useMemo(() => visibleScoreWindows(serverScoreWindows ?? defaultScoreWindows), [serverScoreWindows]);
   const windowMinutes = selectedWindowMinutes && scoreWindows.includes(selectedWindowMinutes) ? selectedWindowMinutes : defaultScoreWindow(scoreWindows);
   const hasConfiguredScoreWindows = Boolean(serverScoreWindows?.length);
 
@@ -67,9 +70,9 @@ export function ScoresPage(props: ScoresPageProps) {
     setLoading(true);
 
     void Promise.all([
-      fetchScoresTop(props.authToken, { ...baseQuery, side: 'bull', limit: 10 }, abortController.signal),
-      fetchScoresTop(props.authToken, { ...baseQuery, side: 'bear', limit: 10 }, abortController.signal),
-      fetchScoresCurrent(props.authToken, { ...baseQuery, side: 'net', limit: 50 }, abortController.signal),
+      fetchScoresTop(props.authToken, { ...baseQuery, side: 'bull', limit: scoreLeaderboardLimit }, abortController.signal),
+      fetchScoresTop(props.authToken, { ...baseQuery, side: 'bear', limit: scoreLeaderboardLimit }, abortController.signal),
+      fetchScoresCurrent(props.authToken, { ...baseQuery, side: 'net', limit: risingCandidateLimit }, abortController.signal),
       fetchScoreMarketRegime(props.authToken, { ...baseQuery, side: 'net', limit: 500 }, abortController.signal)
     ])
       .then(([bull, bear, current, regime]) => {
@@ -92,9 +95,9 @@ export function ScoresPage(props: ScoresPageProps) {
   useEffect(() => {
     const liveUpdate = props.liveScoreUpdate;
     if (!liveUpdate) return;
-    setTopBull((response) => patchScoreResponse(response, liveUpdate, 'bull', 10, false));
-    setTopBear((response) => patchScoreResponse(response, liveUpdate, 'bear', 10, false));
-    setCurrentScores((response) => patchScoreResponse(response, liveUpdate, 'rising', 50, canInsertLiveRows(props.classificationFilter, props.exchangeFilter, props.marketFilter)));
+    setTopBull((response) => patchScoreResponse(response, liveUpdate, 'bull', scoreLeaderboardLimit, false));
+    setTopBear((response) => patchScoreResponse(response, liveUpdate, 'bear', scoreLeaderboardLimit, false));
+    setCurrentScores((response) => patchScoreResponse(response, liveUpdate, 'rising', risingCandidateLimit, canInsertLiveRows(props.classificationFilter, props.exchangeFilter, props.marketFilter)));
   }, [props.classificationFilter, props.exchangeFilter, props.liveScoreUpdate, props.marketFilter]);
 
   useEffect(() => {
@@ -106,12 +109,12 @@ export function ScoresPage(props: ScoresPageProps) {
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [selectedCoin]);
 
-  const bullRows = filterDirectionalRows(filterScoreRows(topBull?.scores ?? [], props), 'bull').slice(0, 10);
-  const bearRows = filterDirectionalRows(filterScoreRows(topBear?.scores ?? [], props), 'bear').slice(0, 10);
+  const bullRows = filterDirectionalRows(filterScoreRows(topBull?.scores ?? [], props), 'bull').slice(0, scoreLeaderboardLimit);
+  const bearRows = filterDirectionalRows(filterScoreRows(topBear?.scores ?? [], props), 'bear').slice(0, scoreLeaderboardLimit);
   const risingRows = filterScoreRows(currentScores?.scores ?? [], props)
     .filter((score) => (score.recentScoreDelta ?? 0) > 0)
     .sort(compareRisingScores)
-    .slice(0, 10);
+    .slice(0, scoreLeaderboardLimit);
   const visibleCurrentScores = filterScoreRows(currentScores?.scores ?? [], props);
   const thinDataCount = visibleCurrentScores.filter((score) => score.confidenceScore < 25).length;
   const health = props.storageStatus?.workers.scores ?? props.liveScoreSnapshot?.health ?? props.status?.workers?.scores ?? null;
@@ -161,8 +164,8 @@ export function ScoresPage(props: ScoresPageProps) {
       {thinDataCount > 0 && minConfidence < 25 ? <div className="warning-banner">Thin-data warning: {thinDataCount} visible score{thinDataCount === 1 ? '' : 's'} are below 25 confidence. Treat these rankings as provisional.</div> : null}
 
       <section className="scores-grid">
-        <ScoreLeaderboardPanel title="Top 10 Bull" subtitle="Strongest positive net edge after bearish pressure is subtracted." tone="bull" rows={bullRows} loading={loading} emptyCopy={emptyCopy(topBull, props.classificationFilter)} selectedCoin={selectedCoin} exchangeAvailability={props.exchangeAvailability} onSelectCoin={setSelectedCoin} />
-        <ScoreLeaderboardPanel title="Top 10 Bear" subtitle="Strongest negative net edge after bullish pressure is subtracted." tone="bear" rows={bearRows} loading={loading} emptyCopy={emptyCopy(topBear, props.classificationFilter)} selectedCoin={selectedCoin} exchangeAvailability={props.exchangeAvailability} onSelectCoin={setSelectedCoin} />
+        <ScoreLeaderboardPanel title="Top 5 Bull" subtitle="Strongest positive net edge after bearish pressure is subtracted." tone="bull" rows={bullRows} loading={loading} emptyCopy={emptyCopy(topBull, props.classificationFilter)} selectedCoin={selectedCoin} exchangeAvailability={props.exchangeAvailability} onSelectCoin={setSelectedCoin} />
+        <ScoreLeaderboardPanel title="Top 5 Bear" subtitle="Strongest negative net edge after bullish pressure is subtracted." tone="bear" rows={bearRows} loading={loading} emptyCopy={emptyCopy(topBear, props.classificationFilter)} selectedCoin={selectedCoin} exchangeAvailability={props.exchangeAvailability} onSelectCoin={setSelectedCoin} />
         <ScoreLeaderboardPanel title="Rising Fast" subtitle="Coins whose net score moved up most recently." tone="rising" rows={risingRows} loading={loading} emptyCopy="No rising scores match these filters." selectedCoin={selectedCoin} exchangeAvailability={props.exchangeAvailability} onSelectCoin={setSelectedCoin} />
         <MarketRegimePanel regime={marketRegime} loading={loading} />
         <ScoreHealthPanel health={health} storageStatus={props.storageStatus} status={props.status} />
@@ -170,14 +173,12 @@ export function ScoresPage(props: ScoresPageProps) {
 
       {selectedCoin ? (
         <div className="score-detail-modal-backdrop" role="presentation" onClick={() => setSelectedCoin(null)}>
-          <div className="score-detail-modal" role="dialog" aria-modal="true" aria-labelledby="score-detail-title" onClick={(event) => event.stopPropagation()}>
+          <div className="score-detail-modal" role="dialog" aria-modal="true" aria-label={`${selectedCoin} score detail`} onClick={(event) => event.stopPropagation()}>
             <button className="modal-close-button score-detail-modal-close" type="button" aria-label="Close score detail" onClick={() => setSelectedCoin(null)}>×</button>
             <ScoreDetailPanel
               authToken={props.authToken}
               coin={selectedCoin}
               query={baseQuery}
-              snapshot={props.snapshot}
-              exchangeAvailability={props.exchangeAvailability}
             />
           </div>
         </div>
@@ -230,6 +231,8 @@ function ScoreRow({ score, tone, selected, exchangeAvailability, onSelect }: { s
       </div>
       <div className="score-row-context">
         <span className="score-reason" title={score.primaryReason ?? undefined}>{score.primaryReason ?? score.dominantSignal ?? 'No dominant reason yet'}</span>
+        {score.scoreState ? <span className="risk-tag muted">{formatFlowState(score.scoreState)}</span> : null}
+        {score.tradeAction ? <span className={`risk-tag ${score.tradeAction === 'AVOID' ? '' : 'muted'}`}>{formatTradeAction(score.tradeAction)}</span> : null}
         {score.riskTags.length ? <RiskTags tags={score.riskTags} /> : null}
         <span className={`delta-badge ${(score.recentScoreDelta ?? 0) >= 0 ? 'up' : 'down'}`}>{formatDelta(score.recentScoreDelta)}</span>
         <span className="score-updated">{formatTime(score.latestScoreTs)}</span>
@@ -304,25 +307,17 @@ function ScoreHealthPanel({ health, storageStatus, status }: { health: ScoreWork
   );
 }
 
-function ScoreDetailPanel({ authToken, coin, query, snapshot, exchangeAvailability }: { authToken: string | null; coin: string; query: ScoreListQuery; snapshot: DashboardSnapshot; exchangeAvailability: ExchangeAvailabilityByMarket }) {
+function ScoreDetailPanel({ authToken, coin, query }: { authToken: string | null; coin: string; query: ScoreListQuery }) {
   const [detail, setDetail] = useState<ScoreDetailResponse | null>(null);
-  const [timeline, setTimeline] = useState<ScoreTimelineResponse | null>(null);
-  const [evidence, setEvidence] = useState<ScoreEvidenceResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const abortController = new AbortController();
     setLoading(true);
-    void Promise.all([
-      fetchScoreDetail(authToken, coin, { ...query, side: 'net', limit: 1 }, abortController.signal),
-      fetchScoreTimeline(authToken, coin, { ...query, side: 'net', limit: 60 }, abortController.signal),
-      fetchScoreEvidence(authToken, coin, { ...query, side: 'net', limit: 80 }, abortController.signal)
-    ])
-      .then(([nextDetail, nextTimeline, nextEvidence]) => {
+    void fetchScoreDetail(authToken, coin, { ...query, side: 'net', limit: 1 }, abortController.signal)
+      .then((nextDetail) => {
         setDetail(nextDetail);
-        setTimeline(nextTimeline);
-        setEvidence(nextEvidence);
         setError(null);
       })
       .catch((fetchError: unknown) => {
@@ -335,28 +330,18 @@ function ScoreDetailPanel({ authToken, coin, query, snapshot, exchangeAvailabili
   }, [authToken, coin, query]);
 
   const score = detail?.score ?? null;
-  const events = latestEventsForCoin(snapshot, coin);
-  const evidenceRows = evidence?.evidence ?? [];
   const displayCoin = score?.coin ?? coin;
-  const scoreExchangeChips = score ? getScoreExchangeChips(score, exchangeAvailability) : [];
-  const scoreMarkets = score ? getScoreMarkets(score, exchangeAvailability) : [];
 
   return (
     <section className={`panel score-detail-panel classification-row ${getCoinClassificationClasses(displayCoin)}`} aria-label={`${displayCoin} score detail`}>
       <div className="score-detail-hero">
-        <div className="score-detail-hero-top">
-          <div className="score-detail-title-lockup">
-            <span className="score-detail-kicker">Live score detail</span>
-            <h2 id="score-detail-title">{displayCoin} Score Detail</h2>
-            <p>{score?.primaryReason ?? 'Evidence is ordered by latest score time and largest contribution. Recency decay means older alerts count less.'}</p>
-          </div>
-        </div>
-
         {score ? (
           <>
             <div className="score-detail-status-row">
               <button className="coin-button coin-button-large" type="button">{score.coin}</button>
               <span className={`regime-pill ${score.marketRegime ?? 'thin_data'}`}>{formatRegime(score.marketRegime)}</span>
+              {score.scoreState ? <span className="risk-tag muted">Flow State {formatFlowState(score.scoreState)}</span> : null}
+              {score.tradeAction ? <span className={`risk-tag ${score.tradeAction === 'AVOID' ? '' : 'muted'}`}>Action {formatTradeAction(score.tradeAction)}</span> : null}
               <span className={`delta-badge ${(score.recentScoreDelta ?? 0) >= 0 ? 'up' : 'down'}`}>{formatDelta(score.recentScoreDelta)}</span>
               <span className="score-updated">Scored {formatTime(score.latestScoreTs)}</span>
             </div>
@@ -369,25 +354,6 @@ function ScoreDetailPanel({ authToken, coin, query, snapshot, exchangeAvailabili
             </div>
 
             <ScorePressureBar score={score} />
-
-            <div className="score-detail-context">
-              <div className="score-detail-context-item">
-                <span>Exchanges</span>
-                <div>{scoreExchangeChips.length ? <ExchangeChips chips={scoreExchangeChips} /> : <strong>Unknown</strong>}</div>
-              </div>
-              <div className="score-detail-context-item">
-                <span>Markets</span>
-                <strong>{scoreMarkets.join(' + ') || 'Unknown'}</strong>
-              </div>
-              <div className="score-detail-context-item">
-                <span>Window</span>
-                <strong>{formatWindow(score.windowMinutes)}</strong>
-              </div>
-              <div className="score-detail-context-item">
-                <span>Evidence</span>
-                <strong>{score.evidenceSummary.total}</strong>
-              </div>
-            </div>
           </>
         ) : null}
       </div>
@@ -397,23 +363,164 @@ function ScoreDetailPanel({ authToken, coin, query, snapshot, exchangeAvailabili
       {!loading && !score ? <div className="empty-state">No current score found for {coin}.</div> : null}
 
       <div className="score-detail-grid">
-        <section className="score-detail-card">
-          <h3>Score Timeline</h3>
-          <ScoreTimelineMiniChart points={timeline?.snapshots ?? []} />
-        </section>
-        <section className="score-detail-card">
-          <h3>Latest Normalized Events</h3>
-          {events.length ? events.map((event) => <LatestEventRow event={event} key={event.id} />) : <div className="empty-state">No live normalized events for {coin} in the current buffer.</div>}
-        </section>
-        <EvidenceSection title="Bull Evidence" side="bull" evidence={evidenceRows} />
-        <EvidenceSection title="Bear Evidence" side="bear" evidence={evidenceRows} />
-        <EvidenceSection title="Risk Evidence" side="risk" evidence={evidenceRows} />
-        <section className="score-detail-card">
-          <h3>Forward Returns</h3>
-          <div className="empty-state">Forward return attribution placeholder. The storage worker can label returns, but this UI waits for a dedicated attribution API.</div>
-        </section>
+        <FlowComponentsCard score={score} />
       </div>
     </section>
+  );
+}
+
+function FlowComponentsCard({ score }: { score: ScoreSummary | null }) {
+  const rows = componentRows(score);
+  return (
+    <section className="score-detail-card flow-components-card">
+      <div className="score-detail-card-header">
+        <h3>Flow Components</h3>
+        <span>{score?.scoreConfigVersion === 'flow-v2' ? 'flow-v2' : 'Optional'}</span>
+      </div>
+      {score?.scoreState || score?.tradeAction ? (
+        <div className="flow-state-grid">
+          <FlowStateStat label="Flow State" value={formatFlowState(score.scoreState)} />
+          <FlowStateStat label="Action" value={formatTradeAction(score.tradeAction)} />
+        </div>
+      ) : null}
+      {rows.length ? (
+        <div className="flow-component-grid">
+          {rows.map((row) => <FlowComponentRow row={row} key={row.family} />)}
+        </div>
+      ) : <div className="empty-state">No flow-v2 component breakdown stored for this score.</div>}
+    </section>
+  );
+}
+
+function FlowStateStat({ label, value }: { label: string; value: string }) {
+  return <div className="flow-state-stat"><span>{label}</span><strong>{value}</strong></div>;
+}
+
+interface FlowComponentDisplayRow {
+  family: string;
+  bull: number;
+  bear: number;
+  details: ScoreFlowBreakdownItem[];
+}
+
+function FlowComponentRow({ row }: { row: FlowComponentDisplayRow }) {
+  const familyLabel = formatFlowFamily(row.family);
+  const balance = componentBalance(row);
+  const hasPressure = row.bull > 0 || row.bear > 0;
+  const visibleDetails = flowVisibleDetails(row);
+  const showDetails = visibleDetails.length > 0 && hasPressure;
+  return (
+    <article className={`flow-component-row ${componentTone(row)} ${hasPressure ? '' : 'quiet'}`}>
+      <div className="flow-component-summary">
+        <div>
+          <strong>{familyLabel}</strong>
+          <span>{componentInsight(row)}</span>
+        </div>
+        <div className="flow-component-score-stack" aria-label={`${familyLabel} total pressure`}>
+          <span>Bull / Bear</span>
+          <b>{formatComponentScore(row.bull)} / {formatComponentScore(row.bear)}</b>
+          <small>{formatSignedScore(row.bull - row.bear)} net</small>
+        </div>
+      </div>
+      {hasPressure ? (
+        <div className="flow-component-balance" aria-label={`${familyLabel} bull bear balance`}>
+          <span className="bull" style={{ width: `${balance.bull}%` }} />
+          <span className="bear" style={{ width: `${balance.bear}%` }} />
+        </div>
+      ) : null}
+      {showDetails ? (
+        <div className={`flow-breakdown-lanes ${visibleDetails.length === 1 ? 'single' : ''}`} aria-label={`${familyLabel} breakdown`}>
+          {visibleDetails.map((detail, index) => <FlowBreakdownLane detail={detail} familyLabel={familyLabel} key={`${row.family}-${detail.side ?? 'side'}-${index}`} />)}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function FlowBreakdownLane({ detail, familyLabel }: { detail: ScoreFlowBreakdownItem; familyLabel: string }) {
+  const side = detail.side === 'bear' ? 'bear' : detail.side === 'bull' ? 'bull' : 'neutral';
+  const sideLabel = formatFlowSidePressure(detail.side);
+  const progress = breakdownProgress(detail);
+  const showMath = hasFlowMath(detail);
+  if (showMath) {
+    return (
+      <section className={`flow-breakdown-lane ${side} math-only`}>
+        <FlowBreakdownMath detail={detail} />
+        {detail.thinLiquidity ? <span className="flow-breakdown-warning">Thin cap</span> : null}
+      </section>
+    );
+  }
+  return (
+    <section className={`flow-breakdown-lane ${side}`}>
+      <div className="flow-breakdown-lane-head">
+        <div>
+          <span>{sideLabel}</span>
+          <strong>{formatBreakdownNumber(detail.score)}</strong>
+        </div>
+        <small>{detail.newestReceivedAt ? `Latest ${formatTime(detail.newestReceivedAt)}` : 'No latest hit'}</small>
+      </div>
+      <div className="flow-lane-progress" aria-label={`${familyLabel} ${formatFlowSide(detail.side)} pressure bar`}>
+        <span style={{ width: `${progress}%` }} />
+      </div>
+      <dl className="flow-lane-metrics">
+        <div>
+          <dt>Raw</dt>
+          <dd>{formatBreakdownNumber(detail.rawScore)}</dd>
+        </div>
+        <div>
+          <dt>Capacity</dt>
+          <dd>{formatBreakdownNumber(detail.maxScore)}</dd>
+        </div>
+        <div>
+          <dt>Hits</dt>
+          <dd>{formatBreakdownNumber(detail.effectiveHits)}</dd>
+        </div>
+        <div>
+          <dt>Multiplier</dt>
+          <dd>{formatMultiplier(detail.multiplier)}</dd>
+        </div>
+      </dl>
+      {detail.thinLiquidity ? <span className="flow-breakdown-warning">Thin cap</span> : null}
+    </section>
+  );
+}
+
+function FlowBreakdownMath({ detail }: { detail: ScoreFlowBreakdownItem }) {
+  const mathRows = flowMathRows(detail);
+  const rawBeforeCap = optionalNumber(detail.rawBeforeCap);
+  const caps = flowCapRows(detail);
+  const finalFormula = formatFlowFinalFormula(detail, caps);
+  if (!mathRows.length && rawBeforeCap === null) return null;
+  return (
+    <div className="flow-lane-math">
+      {mathRows.length ? (
+        <section>
+          <span>Math</span>
+          <dl>
+            {mathRows.map((row) => (
+              <div key={row.label}>
+                <dt>{row.label}</dt>
+                <dd>{formatBreakdownNumber(row.value)}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      ) : null}
+      {caps.length ? (
+        <section>
+          <span>Caps</span>
+          <dl>
+            {caps.map((row) => (
+              <div key={row.label}>
+                <dt>{row.label}</dt>
+                <dd>{formatBreakdownNumber(row.value)}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      ) : null}
+      {finalFormula ? <strong>{finalFormula}</strong> : null}
+    </div>
   );
 }
 
@@ -465,88 +572,6 @@ function ScorePressureBar({ score }: { score: ScoreSummary }) {
   );
 }
 
-function ScoreTimelineMiniChart({ points }: { points: ScoreTimelinePoint[] }) {
-  const ordered = [...points].reverse().slice(-40);
-  const latest = ordered[ordered.length - 1] ?? null;
-  const polyline = ordered.map((point, index) => `${ordered.length <= 1 ? 50 : (index / (ordered.length - 1)) * 100},${clampTimelineY(point.netScore)}`).join(' ');
-  return ordered.length ? (
-    <div className="score-timeline-chart">
-      {latest ? (
-        <div className="score-timeline-stats">
-          <TimelineStat label="Latest Net" value={formatSignedScore(latest.netScore)} />
-          <TimelineStat label="Confidence" value={formatScore(latest.confidenceScore)} />
-          <TimelineStat label="Events" value={latest.eventCount} />
-        </div>
-      ) : null}
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="Net score timeline">
-        <line x1="0" x2="100" y1="50" y2="50" />
-        <polyline points={polyline} />
-      </svg>
-      <div className="score-timeline-points">
-        {points.slice(0, 6).map((point) => (
-          <span key={point.scoreSnapshotId}>{formatTime(point.ts)} · {formatSignedScore(point.netScore)} net · {formatDelta(point.recentScoreDelta)}</span>
-        ))}
-      </div>
-    </div>
-  ) : <div className="empty-state">No score history yet.</div>;
-}
-
-function TimelineStat({ label, value }: { label: string; value: number | string }) {
-  return <div className="score-timeline-stat"><span>{label}</span><strong>{value}</strong></div>;
-}
-
-function EvidenceSection({ title, side, evidence }: { title: string; side: ScoreEvidenceSide; evidence: ScoreEvidenceItem[] }) {
-  const rows = evidence.filter((item) => item.side === side).slice(0, 10);
-  const maxContribution = Math.max(1, ...rows.map((item) => Math.abs(item.contribution)));
-  return (
-    <section className={`score-detail-card evidence-card ${side}`}>
-      <div className="score-detail-card-header">
-        <h3>{title}</h3>
-        <span>{rows.length ? `${rows.length} signals` : 'None'}</span>
-      </div>
-      {rows.length ? rows.map((item) => <EvidenceRow item={item} maxContribution={maxContribution} key={item.evidenceKey} />) : <div className="empty-state">No {side} evidence in the latest score window.</div>}
-    </section>
-  );
-}
-
-function EvidenceRow({ item, maxContribution }: { item: ScoreEvidenceItem; maxContribution: number }) {
-  const exchange = stringPayload(item.payload, 'exchange');
-  const market = stringPayload(item.payload, 'market');
-  const contributionWidth = item.contribution === 0 ? 0 : Math.max(8, clampPercent((Math.abs(item.contribution) / maxContribution) * 100));
-  return (
-    <article className={`evidence-row ${item.side}`}>
-      <div className="evidence-row-main">
-        <span className="evidence-contribution">{formatSignedScore(item.contribution)}</span>
-        <div>
-          <strong>{item.reason}</strong>
-          <span>{item.feedKey} · {formatRuleKey(item.ruleKey)} · {formatTime(item.sourceReceivedAt)}</span>
-        </div>
-      </div>
-      <div className="evidence-bar-track" aria-hidden="true">
-        <span className="evidence-bar-fill" style={{ width: `${contributionWidth}%` }} />
-      </div>
-      <div className="evidence-pills">
-        <span className="chip">Decay {item.decayMultiplier.toFixed(2)}</span>
-        <span className="chip">Weight {formatScore(item.weight)}</span>
-        {exchange ? <span className="chip">{exchange}</span> : null}
-        {market ? <span className="chip">{market}</span> : null}
-      </div>
-    </article>
-  );
-}
-
-function LatestEventRow({ event }: { event: NormalizedEvent }) {
-  return (
-    <article className="evidence-row latest-event-row event">
-      <span className="latest-event-dot" aria-hidden="true" />
-      <div>
-        <strong>{event.title}</strong>
-        <span>{event.feedKey} · {formatTime(event.receivedAt)} · {event.coins.join(', ') || event.entries.map((entry) => entry.coin).filter(Boolean).join(', ')}</span>
-      </div>
-    </article>
-  );
-}
-
 function RiskTags({ tags }: { tags: string[] }) {
   if (!tags.length) return <span className="risk-tag muted">No risk tags</span>;
   return (
@@ -572,8 +597,13 @@ function normalizeScoreWindows(windows: number[]): number[] {
   return unique.length ? unique : defaultScoreWindows;
 }
 
+function visibleScoreWindows(windows: number[]): number[] {
+  const visible = normalizeScoreWindows(windows).filter((window) => allowedScoreWindows.includes(window));
+  return visible.length ? visible : defaultScoreWindows;
+}
+
 function defaultScoreWindow(windows: number[]): number {
-  return windows.includes(15) ? 15 : windows[0] ?? 15;
+  return windows.includes(5) ? 5 : windows[0] ?? 5;
 }
 
 function filterScoreRows(rows: ScoreSummary[], props: Pick<ScoresPageProps, 'classificationFilter' | 'exchangeFilter' | 'marketFilter' | 'exchangeAvailability'>): ScoreSummary[] {
@@ -656,6 +686,10 @@ function mergeLiveScore(row: ScoreSummary, item: ScoreUpdateSseEvent['scores'][n
     confidenceScore: item.confidenceScore,
     dominantSignal: item.dominantSignal,
     marketRegime: item.marketRegime,
+    scoreState: item.scoreState ?? row.scoreState ?? null,
+    tradeAction: item.tradeAction ?? row.tradeAction ?? null,
+    componentScores: item.componentScores ?? row.componentScores ?? null,
+    flowBreakdown: item.flowBreakdown ?? row.flowBreakdown ?? null,
     recentScoreDelta: item.netScoreDelta,
     updatedAt: event.generatedAt,
     evidenceSummary: { ...row.evidenceSummary, total: Math.max(row.evidenceSummary.total, item.evidenceCount) }
@@ -676,6 +710,10 @@ function liveScoreToSummary(item: ScoreUpdateSseEvent['scores'][number], event: 
     updatedAt: event.generatedAt,
     dominantSignal: item.dominantSignal,
     marketRegime: item.marketRegime,
+    scoreState: item.scoreState ?? null,
+    tradeAction: item.tradeAction ?? null,
+    componentScores: item.componentScores ?? null,
+    flowBreakdown: item.flowBreakdown ?? null,
     primaryReason: item.dominantSignal ? formatRuleKey(item.dominantSignal) : 'Live score update',
     riskTags: [],
     evidenceSummary: { total: item.evidenceCount, topRuleKeys: item.dominantSignal ? [item.dominantSignal] : [], feedKeys: [], sides: [] },
@@ -701,15 +739,6 @@ function compareBearScores(left: ScoreSummary, right: ScoreSummary): number {
 
 function compareRisingScores(left: ScoreSummary, right: ScoreSummary): number {
   return (right.recentScoreDelta ?? 0) - (left.recentScoreDelta ?? 0) || Math.abs(right.netScore) - Math.abs(left.netScore) || right.confidenceScore - left.confidenceScore;
-}
-
-function latestEventsForCoin(snapshot: DashboardSnapshot, coin: string): NormalizedEvent[] {
-  const normalized = coin.toUpperCase();
-  return Object.values(snapshot.feeds)
-    .flatMap((feed) => feed.events)
-    .filter((event) => event.coins.some((item) => item.toUpperCase() === normalized) || event.entries.some((entry) => entry.coin?.toUpperCase() === normalized))
-    .sort((left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt))
-    .slice(0, 8);
 }
 
 function emptyCopy(response: ScoresListResponse | null, classificationFilter: CoinClassificationFilter): string {
@@ -761,6 +790,10 @@ function formatScore(value: number): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value);
 }
 
+function formatComponentScore(value: number): string {
+  return new Intl.NumberFormat(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value);
+}
+
 function formatSignedScore(value: number): string {
   return `${value > 0 ? '+' : ''}${formatScore(value)}`;
 }
@@ -768,10 +801,6 @@ function formatSignedScore(value: number): string {
 function clampPercent(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(100, value));
-}
-
-function clampTimelineY(netScore: number): number {
-  return Math.max(4, Math.min(96, 50 - netScore / 2));
 }
 
 function formatDelta(value: number | null): string {
@@ -792,6 +821,189 @@ function formatRegime(value: ScoreMarketRegime | null | undefined): string {
   return value[0]?.toUpperCase() + value.slice(1);
 }
 
+function formatFlowState(value: string | null | undefined): string {
+  if (!value) return 'Unknown';
+  return formatEnumLabel(value);
+}
+
+function formatTradeAction(value: string | null | undefined): string {
+  if (!value) return 'Unknown';
+  if (value === 'LONG_WATCH') return 'Bullish';
+  if (value === 'SHORT_WATCH') return 'Bearish';
+  return formatEnumLabel(value);
+}
+
+function formatFlowFamily(value: string): string {
+  if (value === 'topOi') return 'Top OI';
+  if (value === 'bigActivity') return 'Big Activity';
+  return formatEnumLabel(value);
+}
+
+function componentRows(score: ScoreSummary | null): FlowComponentDisplayRow[] {
+  const componentScores = score?.componentScores ?? null;
+  const detailsByFamily = new Map<string, ScoreFlowBreakdownItem[]>();
+  for (const detail of score?.flowBreakdown ?? []) {
+    const family = typeof detail.family === 'string' ? detail.family : null;
+    if (!family) continue;
+    const details = detailsByFamily.get(family) ?? [];
+    details.push(detail);
+    detailsByFamily.set(family, details);
+  }
+  const preferredOrder = ['spot', 'derivatives', 'topOi', 'bigActivity'];
+  const families = new Set<string>([
+    ...Object.keys(componentScores ?? {}),
+    ...detailsByFamily.keys()
+  ]);
+  return [...families]
+    .sort((left, right) => flowFamilySortIndex(left, preferredOrder) - flowFamilySortIndex(right, preferredOrder) || left.localeCompare(right))
+    .map((family) => {
+      const scores = componentScores?.[family] ?? scoresFromBreakdown(detailsByFamily.get(family) ?? []);
+      return {
+        family,
+        bull: Number(scores.bull ?? 0),
+        bear: Number(scores.bear ?? 0),
+        details: sortFlowDetails(detailsByFamily.get(family) ?? [])
+      };
+    });
+}
+
+function scoresFromBreakdown(details: ScoreFlowBreakdownItem[]): { bull: number; bear: number } {
+  return details.reduce<{ bull: number; bear: number }>((totals, detail) => {
+    if (detail.side === 'bull') totals.bull += numberValue(detail.score);
+    if (detail.side === 'bear') totals.bear += numberValue(detail.score);
+    return totals;
+  }, { bull: 0, bear: 0 });
+}
+
+function sortFlowDetails(details: ScoreFlowBreakdownItem[]): ScoreFlowBreakdownItem[] {
+  return [...details].sort((left, right) => flowSideSortIndex(left.side) - flowSideSortIndex(right.side));
+}
+
+function flowVisibleDetails(row: FlowComponentDisplayRow): ScoreFlowBreakdownItem[] {
+  if (row.bull > 0 && row.bear > 0) return row.details;
+  return row.details.filter((detail) => numberValue(detail.score) > 0);
+}
+
+function flowFamilySortIndex(family: string, preferredOrder: string[]): number {
+  const index = preferredOrder.indexOf(family);
+  return index >= 0 ? index : preferredOrder.length;
+}
+
+function flowSideSortIndex(side: string | undefined): number {
+  if (side === 'bull') return 0;
+  if (side === 'bear') return 1;
+  return 2;
+}
+
+function componentTone(row: FlowComponentDisplayRow): 'bull' | 'bear' | 'neutral' {
+  if (row.bull > row.bear) return 'bull';
+  if (row.bear > row.bull) return 'bear';
+  return 'neutral';
+}
+
+function componentInsight(row: FlowComponentDisplayRow): string {
+  const net = row.bull - row.bear;
+  if (net > 0) return `${formatSignedScore(net)} bull pressure`;
+  if (net < 0) return `${formatSignedScore(net)} bear pressure`;
+  return row.bull || row.bear ? 'Balanced pressure' : 'Quiet component';
+}
+
+function componentBalance(row: FlowComponentDisplayRow): { bull: number; bear: number } {
+  const bull = Math.max(0, row.bull);
+  const bear = Math.max(0, row.bear);
+  const total = bull + bear;
+  if (!total) return { bull: 50, bear: 50 };
+  return {
+    bull: clampPercent((bull / total) * 100),
+    bear: clampPercent((bear / total) * 100)
+  };
+}
+
+function breakdownProgress(detail: ScoreFlowBreakdownItem): number {
+  const score = numberValue(detail.score);
+  const maxScore = numberValue(detail.maxScore);
+  if (maxScore <= 0) return score > 0 ? 100 : 0;
+  return clampPercent((Math.max(0, score) / maxScore) * 100);
+}
+
+function hasFlowMath(detail: ScoreFlowBreakdownItem): boolean {
+  return flowMathRows(detail).length > 0 || optionalNumber(detail.rawBeforeCap) !== null;
+}
+
+function flowMathRows(detail: ScoreFlowBreakdownItem): Array<{ label: string; value: number }> {
+  const subpoints = detail.subpoints ?? {};
+  const candidates: Array<[string, keyof typeof subpoints]> = [
+    ['Dominance', 'dominancePoints'],
+    ['Rel impact', 'relativeImpactPoints'],
+    ['Delta', 'deltaPoints'],
+    ['Rank', 'rankPoints'],
+    ['1h hits', 'hitPoints'],
+    ['OI move', 'oiPercentPoints'],
+    ['Price conf', 'priceConfirmationPoints'],
+    ['Amount', 'amountPoints'],
+    ['Freshness', 'freshnessPoints']
+  ];
+  return candidates
+    .map(([label, key]) => ({ label, value: subpointNumber(subpoints[key]) }))
+    .filter((row): row is { label: string; value: number } => row.value !== null);
+}
+
+function flowCapRows(detail: ScoreFlowBreakdownItem): Array<{ label: string; value: number }> {
+  const caps: Array<{ label: string; value: number | null }> = [
+    { label: 'Volume cap', value: optionalNumber(detail.volumeCap) },
+    { label: 'Activity cap', value: optionalNumber(detail.activityCap) },
+    { label: 'Liquidity cap', value: optionalNumber(detail.liquidityCap) },
+    { label: 'Max', value: optionalNumber(detail.maxScore) }
+  ];
+  return caps.filter((row): row is { label: string; value: number } => row.value !== null);
+}
+
+function formatFlowFinalFormula(detail: ScoreFlowBreakdownItem, caps: Array<{ label: string; value: number }>): string | null {
+  const rawBeforeCap = optionalNumber(detail.rawBeforeCap);
+  const finalScore = optionalNumber(detail.score);
+  if (rawBeforeCap === null || finalScore === null || !caps.length) return null;
+  const capText = caps.map((cap) => formatBreakdownNumber(cap.value)).join(', ');
+  const multiplier = optionalNumber(detail.multiplier);
+  const minText = `min(${formatBreakdownNumber(rawBeforeCap)}, ${capText})`;
+  if (multiplier !== null && multiplier !== 1) return `${minText} x ${formatBreakdownNumber(multiplier)} = ${formatBreakdownNumber(finalScore)}`;
+  return `${minText} = ${formatBreakdownNumber(finalScore)}`;
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function optionalNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function subpointNumber(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value === 0) return null;
+  return value;
+}
+
+function formatFlowSide(value: string | undefined): string {
+  if (value === 'bull') return 'Bull';
+  if (value === 'bear') return 'Bear';
+  return 'Other';
+}
+
+function formatFlowSidePressure(value: string | undefined): string {
+  if (value === 'bull') return 'Bull Pressure';
+  if (value === 'bear') return 'Bear Pressure';
+  return 'Other Pressure';
+}
+
+function formatBreakdownNumber(value: unknown): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 'n/a';
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
+}
+
+function formatMultiplier(value: unknown): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 'n/a';
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value)}x`;
+}
+
 function formatRiskTag(value: string): string {
   if (value === 'positive_funding_overheated') return 'Overheated Funding';
   return formatRuleKey(value);
@@ -801,7 +1013,6 @@ function formatRuleKey(value: string): string {
   return value.replace(/_/g, ' ').replace(/\b\w/gu, (letter) => letter.toUpperCase());
 }
 
-function stringPayload(payload: Record<string, unknown>, key: string): string | null {
-  const value = payload[key];
-  return typeof value === 'string' && value.trim() ? value : null;
+function formatEnumLabel(value: string): string {
+  return value.replace(/_/g, ' ').toLowerCase().replace(/\b\w/gu, (letter) => letter.toUpperCase());
 }

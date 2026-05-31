@@ -66,9 +66,46 @@ describe('StatusBar', () => {
 
     expect(screen.getByText('Storage: degraded')).toBeInTheDocument();
   });
+
+  it('asks for confirmation before clearing event data', async () => {
+    const user = userEvent.setup();
+    const onClearEventData = vi.fn();
+    render(<StatusBarHarness onClearEventData={onClearEventData} />);
+
+    await user.click(screen.getByRole('button', { name: 'Clear events' }));
+    expect(screen.getByRole('dialog', { name: 'Confirm clear event data' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Clear event data' }));
+
+    expect(onClearEventData).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog', { name: 'Confirm clear event data' })).not.toBeInTheDocument();
+  });
+
+  it('asks for stronger confirmation before resetting all stored data', async () => {
+    const user = userEvent.setup();
+    const onResetAllStoredData = vi.fn();
+    render(<StatusBarHarness onResetAllStoredData={onResetAllStoredData} />);
+
+    await user.click(screen.getByRole('button', { name: 'Reset all data' }));
+    expect(screen.getByRole('dialog', { name: 'Confirm reset all stored data' })).toBeInTheDocument();
+    expect(screen.getByText('Deletes events, scores, popup evidence, market labels, and the raw event log. Fresh websocket data will start filling again.')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Reset stored data' }));
+
+    expect(onResetAllStoredData).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog', { name: 'Confirm reset all stored data' })).not.toBeInTheDocument();
+  });
 });
 
-function StatusBarHarness({ status = null }: { status?: ReturnType<typeof makeStatus> | null }) {
+function StatusBarHarness({
+  status = null,
+  onClearEventData = vi.fn(),
+  onResetAllStoredData = vi.fn()
+}: {
+  status?: ReturnType<typeof makeStatus> | null;
+  onClearEventData?: () => void;
+  onResetAllStoredData?: () => void;
+}) {
   const [classificationFilter, setClassificationFilter] = useState<CoinClassificationFilter>([]);
   const [exchangeFilter, setExchangeFilter] = useState<ExchangeFilter>([]);
   const [marketFilter, setMarketFilter] = useState<MarketFilter>([]);
@@ -87,6 +124,10 @@ function StatusBarHarness({ status = null }: { status?: ReturnType<typeof makeSt
       exchangeFilter={exchangeFilter}
       marketFilter={marketFilter}
       theme="dark"
+      eventClearState="idle"
+      eventClearMessage={null}
+      dataResetState="idle"
+      dataResetMessage={null}
       onTogglePause={vi.fn()}
       onToggleSound={vi.fn()}
       onToggleNotifications={vi.fn()}
@@ -94,6 +135,8 @@ function StatusBarHarness({ status = null }: { status?: ReturnType<typeof makeSt
       onExchangeFilterChange={setExchangeFilter}
       onMarketFilterChange={setMarketFilter}
       onToggleTheme={vi.fn()}
+      onClearEventData={onClearEventData}
+      onResetAllStoredData={onResetAllStoredData}
     />
   );
 }

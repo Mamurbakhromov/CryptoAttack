@@ -66,6 +66,27 @@ describe('EventStore', () => {
     expect(snapshot.counters.byFeed.oi_alerts).toBe(1);
   });
 
+  it('clears live event buffers and counters while keeping socket status support intact', () => {
+    const store = createStore();
+    store.addEvent(makeEvent('listing-one', 'listings'));
+    store.addEvent(makeEvent('oi-alert-one', 'oi_alerts'));
+
+    store.clearEventData();
+
+    const snapshot = store.getSnapshot();
+    expect(snapshot.feeds.listings.events).toHaveLength(0);
+    expect(snapshot.feeds.oi_alerts.events).toHaveLength(0);
+    expect(snapshot.lastEventTime).toBeNull();
+    expect(snapshot.latency.samples).toBe(0);
+    expect(snapshot.counters).toMatchObject({
+      received: 0,
+      stored: 0,
+      deduplicated: 0
+    });
+    expect(snapshot.counters.byFeed.listings).toBe(0);
+    expect(store.getStats().dedupeSize).toBe(0);
+  });
+
   it('allows the same id again after dedupe TTL expires', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));

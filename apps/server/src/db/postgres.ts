@@ -4,6 +4,9 @@ import type { AppConfig } from '../config.js';
 
 export type DatabaseConfig = AppConfig['database'];
 export type PostgresPool = Pool;
+export interface PostgresConnectionVerifier {
+  query(text: string): Promise<unknown>;
+}
 
 export function createPostgresPool(config: DatabaseConfig): PostgresPool | null {
   if (!config.storageEnabled) return null;
@@ -13,6 +16,7 @@ export function createPostgresPool(config: DatabaseConfig): PostgresPool | null 
     connectionString: config.url,
     max: config.poolMax,
     application_name: 'cryptoattack-dashboard',
+    connectionTimeoutMillis: config.statementTimeoutMs,
     statement_timeout: config.statementTimeoutMs,
     query_timeout: config.statementTimeoutMs,
     ...(config.ssl ? { ssl: { rejectUnauthorized: false } } : {})
@@ -21,8 +25,26 @@ export function createPostgresPool(config: DatabaseConfig): PostgresPool | null 
   return new Pool(poolConfig);
 }
 
-export async function verifyPostgresConnection(pool: PostgresPool): Promise<void> {
-  await pool.query('select 1');
+export async function verifyPostgresConnection(pool: PostgresConnectionVerifier, timeoutMs?: number): Promise<void> {
+  if (!timeoutMs) {
+    await pool.query('select 1');
+    return;
+  }
+
+  let timeout: NodeJS.Timeout | null = null;
+  try {
+    await Promise.race([
+      pool.query('select 1'),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`Timed out verifying Postgres connection after ${timeoutMs}ms`));
+        }, timeoutMs);
+        timeout.unref?.();
+      })
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 export async function closePostgresPool(pool: PostgresPool | null): Promise<void> {

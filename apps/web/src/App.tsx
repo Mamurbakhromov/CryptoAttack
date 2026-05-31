@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { connectDashboardStream, fetchDashboardSnapshot, fetchDashboardStatus, fetchExchangeSymbols, getEnvDashboardAuthToken } from './api/sse';
+import { clearEventData, connectDashboardStream, fetchDashboardSnapshot, fetchDashboardStatus, fetchExchangeSymbols, getEnvDashboardAuthToken, resetAllStoredData } from './api/sse';
 import type { CoinClassificationFilter } from './coinClassification';
 import { AmountsPage } from './components/AmountsPage';
 import { BigActivitiesPage } from './components/BigActivitiesPage';
+import { CoinHistoryPage } from './components/CoinHistoryPage';
 import { Dashboard } from './components/Dashboard';
 import { DebugPage } from './components/DebugPage';
 import { buildExchangeAvailability, emptyExchangeAvailability, type ExchangeAvailabilityByMarket } from './components/ExchangeChips';
@@ -41,9 +42,13 @@ type DashboardPage =
   | 'news'
   | 'coins'
   | 'performance'
+  | 'history'
   | 'debug';
 
-const pageNavItems: Array<{ page: DashboardPage; label: string; path: string }> = [
+type NavigableDashboardPage = DashboardPage;
+
+const pageNavItems: Array<{ page: NavigableDashboardPage; label: string; path: string }> = [
+  { page: 'history', label: 'History', path: '/history' },
   { page: 'bull', label: 'Top Spot', path: '/bull' },
   { page: 'bear', label: 'OI and Listings', path: '/bear' },
   { page: 'scores', label: 'Scores', path: '/scores' },
@@ -64,7 +69,7 @@ const pageNavItems: Array<{ page: DashboardPage; label: string; path: string }> 
   { page: 'debug', label: 'Debug', path: '/debug' }
 ];
 
-const pagePathByKey = Object.fromEntries(pageNavItems.map((item) => [item.page, item.path])) as Record<DashboardPage, string>;
+const pagePathByKey = Object.fromEntries(pageNavItems.map((item) => [item.page, item.path])) as Record<NavigableDashboardPage, string>;
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<DashboardSnapshot>(() => createEmptySnapshot());
@@ -78,6 +83,7 @@ export default function App() {
   const [authToken] = useState(() => getDashboardToken());
   const [apiError, setApiError] = useState<string | null>(null);
   const [page, setPage] = useState<DashboardPage>(() => getDashboardPage());
+  const [routeLocation, setRouteLocation] = useState(() => `${window.location.pathname}${window.location.search}`);
   const [theme, setTheme] = useState<ThemeMode>(() => getInitialTheme());
   const [exchangeAvailability, setExchangeAvailability] = useState<ExchangeAvailabilityByMarket>(() => emptyExchangeAvailability());
   const [classificationFilter, setClassificationFilter] = useState<CoinClassificationFilter>(() => ['halal']);
@@ -87,6 +93,10 @@ export default function App() {
   const [liveScoreUpdate, setLiveScoreUpdate] = useState<ScoreUpdateSseEvent | null>(null);
   const [liveScoreSnapshot, setLiveScoreSnapshot] = useState<ScoreSnapshotSseEvent | null>(null);
   const [storageStatus, setStorageStatus] = useState<StorageStatusResponse | null>(null);
+  const [eventClearState, setEventClearState] = useState<'idle' | 'clearing' | 'success' | 'error'>('idle');
+  const [eventClearMessage, setEventClearMessage] = useState<string | null>(null);
+  const [dataResetState, setDataResetState] = useState<'idle' | 'resetting' | 'success' | 'error'>('idle');
+  const [dataResetMessage, setDataResetMessage] = useState<string | null>(null);
 
   const pausedRef = useRef(paused);
   const queuedEventsRef = useRef<NormalizedEvent[]>([]);
@@ -108,7 +118,10 @@ export default function App() {
   }, [notificationsEnabled]);
 
   useEffect(() => {
-    const syncPage = () => setPage(getDashboardPage());
+    const syncPage = () => {
+      setPage(getDashboardPage());
+      setRouteLocation(`${window.location.pathname}${window.location.search}`);
+    };
     window.addEventListener('popstate', syncPage);
     return () => window.removeEventListener('popstate', syncPage);
   }, []);
@@ -224,10 +237,57 @@ export default function App() {
     if (Notification.permission === 'granted') setNotificationsEnabled((value) => !value);
   };
 
-  const navigatePage = (nextPage: DashboardPage) => {
+  const navigatePage = (nextPage: NavigableDashboardPage) => {
     const path = pagePathByKey[nextPage];
     if (window.location.pathname !== path) window.history.pushState({}, '', path);
     setPage(nextPage);
+    setRouteLocation(`${window.location.pathname}${window.location.search}`);
+  };
+
+  const handleClearEventData = async () => {
+    setEventClearState('clearing');
+    setEventClearMessage(null);
+    try {
+      const response = await clearEventData(authToken);
+      queuedEventsRef.current = [];
+      setQueuedCount(0);
+      setHighlightedIds(new Set());
+      setSnapshot(response.snapshot);
+      setStatus(response.status);
+      setStorageStatus(response.storageStatus);
+      setApiError(null);
+      setEventClearState('success');
+      setEventClearMessage(response.database ? `Cleared ${response.database.tables.length} event tables` : 'Cleared live event data');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setEventClearState('error');
+      setEventClearMessage(message);
+      setApiError(message);
+    }
+  };
+
+  const handleResetAllStoredData = async () => {
+    setDataResetState('resetting');
+    setDataResetMessage(null);
+    try {
+      const response = await resetAllStoredData(authToken);
+      queuedEventsRef.current = [];
+      setQueuedCount(0);
+      setHighlightedIds(new Set());
+      setSnapshot(response.snapshot);
+      setStatus(response.status);
+      setStorageStatus(response.storageStatus);
+      setLiveScoreUpdate(null);
+      setLiveScoreSnapshot(response.scoreSnapshot);
+      setApiError(null);
+      setDataResetState('success');
+      setDataResetMessage(formatResetAllDataMessage(response.database?.tables.length ?? 0, response.rawLog.bytesBefore));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setDataResetState('error');
+      setDataResetMessage(message);
+      setApiError(message);
+    }
   };
 
   const flashEvent = (id: string) => {
@@ -256,6 +316,10 @@ export default function App() {
         exchangeFilter={exchangeFilter}
         marketFilter={marketFilter}
         theme={theme}
+        eventClearState={eventClearState}
+        eventClearMessage={eventClearMessage}
+        dataResetState={dataResetState}
+        dataResetMessage={dataResetMessage}
         onTogglePause={togglePause}
         onToggleSound={() => setSoundEnabled((value) => !value)}
         onToggleNotifications={() => void toggleNotifications()}
@@ -263,6 +327,8 @@ export default function App() {
         onExchangeFilterChange={setExchangeFilter}
         onMarketFilterChange={setMarketFilter}
         onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
+        onClearEventData={() => void handleClearEventData()}
+        onResetAllStoredData={() => void handleResetAllStoredData()}
       />
       {apiError ? (
         <div className="mx-auto mt-3 max-w-[1800px] px-4 md:px-6">
@@ -272,7 +338,16 @@ export default function App() {
         </div>
       ) : null}
       <PageSwitcher page={page} onNavigate={navigatePage} />
-      {page === 'coins' ? (
+      {page === 'history' ? (
+        <CoinHistoryPage
+          authToken={authToken}
+          coin={getHistoryCoinFromPath(routeLocation) ?? ''}
+          storageStateLabel={formatHistoryStorageLabel(storageStatus, status)}
+          exchangeAvailability={exchangeAvailability}
+          classificationFilter={classificationFilter}
+          performanceTrends={performanceTrends}
+        />
+      ) : page === 'coins' ? (
         <ExchangeCoinsPage authToken={authToken} classificationFilter={classificationFilter} exchangeFilter={exchangeFilter} marketFilter={[]} />
       ) : page === 'scores' ? (
         <ScoresPage
@@ -337,6 +412,30 @@ function buildPerformanceTrends(performanceByExchange: Partial<Record<ExchangeKe
   }
 
   return trends;
+}
+
+function formatResetAllDataMessage(tableCount: number, rawLogBytesBefore: number | null): string {
+  const rawLogPart = rawLogBytesBefore && rawLogBytesBefore > 0 ? `, raw log ${formatBytes(rawLogBytesBefore)}` : '';
+  return `Reset ${tableCount} tables${rawLogPart}`;
+}
+
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let amount = value;
+  let unitIndex = 0;
+  while (amount >= 1024 && unitIndex < units.length - 1) {
+    amount /= 1024;
+    unitIndex += 1;
+  }
+  return `${amount.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function formatHistoryStorageLabel(storageStatus: StorageStatusResponse | null, status: ApiStatus | null): string {
+  const state = storageStatus?.health?.state ?? status?.health?.state ?? null;
+  if (state) return `Storage ${state}`;
+  if (status?.database?.enabled === false) return 'Storage disabled';
+  return 'Storage unknown';
 }
 
 export function filterSnapshotByExchange(snapshot: DashboardSnapshot, exchangeAvailability: ExchangeAvailabilityByMarket, exchangeFilter: ExchangeFilter, marketFilter: MarketFilter): DashboardSnapshot {
@@ -421,11 +520,17 @@ function addPerformanceTrend(trends: Map<string, Set<'gainer' | 'loser'>>, coin:
   trends.set(normalized, coinTrends);
 }
 
-function PageSwitcher({ page, onNavigate }: { page: DashboardPage; onNavigate: (page: DashboardPage) => void }) {
+function PageSwitcher({ page, onNavigate }: { page: DashboardPage; onNavigate: (page: NavigableDashboardPage) => void }) {
   return (
     <nav className="page-switcher" aria-label="Dashboard pages">
       {pageNavItems.map((item) => (
-        <button className={page === item.page ? `active ${item.page}` : item.page} type="button" onClick={() => onNavigate(item.page)} key={item.page}>
+        <button
+          aria-current={page === item.page ? 'page' : undefined}
+          className={page === item.page ? `active ${item.page}` : item.page}
+          type="button"
+          onClick={() => onNavigate(item.page)}
+          key={item.page}
+        >
           {item.label}
         </button>
       ))}
@@ -514,6 +619,7 @@ function getDashboardToken(): string | null {
 }
 
 function getDashboardPage(): DashboardPage {
+  if (window.location.pathname === '/history' || window.location.pathname.startsWith('/history/')) return 'history';
   if (window.location.pathname.startsWith('/exchanges')) return 'coins';
   if (window.location.pathname.startsWith('/binance-oi')) return 'oi-alerts';
   if (window.location.pathname.startsWith('/signals')) return 'price-alerts';
@@ -521,6 +627,16 @@ function getDashboardPage(): DashboardPage {
   if (window.location.pathname.startsWith('/market-data')) return 'market-data';
   const item = pageNavItems.find((candidate) => window.location.pathname.startsWith(candidate.path));
   return item?.page ?? 'bull';
+}
+
+function getHistoryCoinFromPath(pathname: string): string | null {
+  const match = /^\/history\/([^/?#]+)/u.exec(pathname);
+  if (!match?.[1]) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
 }
 
 function getInitialTheme(): ThemeMode {

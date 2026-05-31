@@ -32,6 +32,11 @@ export interface IngestionErrorInput {
   payload?: unknown;
 }
 
+export interface ClearEventDataResult {
+  clearedAt: string;
+  tables: string[];
+}
+
 interface QueryableClient {
   query<T extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]): Promise<QueryResult<T>>;
 }
@@ -100,6 +105,60 @@ export class EventIngestionRepository {
 
   async recordIngestionError(input: IngestionErrorInput): Promise<void> {
     await queryRecordIngestionError(this.pool as unknown as QueryableClient, input);
+  }
+}
+
+const eventDataTables = [
+  'event_entries',
+  'normalized_events',
+  'raw_events',
+  'event_entry_keys',
+  'normalized_event_keys',
+  'raw_event_keys'
+] as const;
+
+const allStoredDataTables = [
+  'score_evidence',
+  'coin_score_current',
+  'score_snapshots',
+  'forward_returns',
+  'price_ticks',
+  'event_entries',
+  'normalized_events',
+  'raw_events',
+  'event_entry_keys',
+  'normalized_event_keys',
+  'raw_event_keys',
+  'ingestion_errors'
+] as const;
+
+export class EventMaintenanceRepository {
+  constructor(private readonly pool: Pool | ConnectablePool) {}
+
+  async clearEventData(): Promise<ClearEventDataResult> {
+    return this.truncateTables([...eventDataTables]);
+  }
+
+  async clearAllStoredData(): Promise<ClearEventDataResult> {
+    return this.truncateTables([...allStoredDataTables]);
+  }
+
+  private async truncateTables(tables: string[]): Promise<ClearEventDataResult> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('begin');
+      await client.query(`truncate table ${tables.join(', ')} restart identity`);
+      await client.query('commit');
+      return {
+        clearedAt: new Date().toISOString(),
+        tables
+      };
+    } catch (error) {
+      await rollbackQuietly(client);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 }
 

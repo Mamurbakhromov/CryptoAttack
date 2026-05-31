@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import { calculateFlowScores } from './flowScoreEngine.js';
 import type { ScoreConfig, ScoreEvidenceOutput, ScoreResult, ScoreRuleConfig, ScoreSide, ScoreSourceRow, ScoreWindowConfig } from './types.js';
 
 interface RuleContribution {
@@ -19,6 +20,8 @@ export interface ScoreEngineInput {
 }
 
 export function calculateScores(input: ScoreEngineInput): ScoreResult[] {
+  if (input.config.engine === 'flow-v2' || input.config.version === 'flow-v2') return calculateFlowScores(input);
+
   const asOfMs = Date.parse(input.asOf);
   const windows = input.config.windows.filter((window) => !input.windowsMinutes || input.windowsMinutes.includes(window.minutes));
   const rowsByCoin = groupRowsByCoin(input.sourceRows);

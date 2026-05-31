@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { FlowsPage } from './FlowsPage';
 import { BigActivitiesPage } from './BigActivitiesPage';
 import { Dashboard } from './Dashboard';
+import { BsHistoryChart } from './BsHistoryPanel';
 import { emptyExchangeAvailability } from './ExchangeChips';
 import { MarketDataPage } from './MarketDataPage';
 import { OiTopTable } from './OiTopTable';
@@ -92,6 +93,7 @@ describe('structured feed pages', () => {
 
   it('shows B/S 3 average and opens exact 1h ratio history from bull tables', async () => {
     const user = userEvent.setup();
+    window.history.pushState({}, '', '/bull');
     const snapshot = makeSnapshot({
       all_spot_top_buy_5m: [
         makeEvent('all_spot_top_buy_5m', { id: 'spot-buy-3', receivedAt: '2026-01-01T00:30:00.000Z', entries: [makeEntry({ coin: 'BTC', direction: 'buy', buyUsd: 3_000_000, sellUsd: 1_000_000, deltaUsd: 2_000_000, buySellRatio: 3, volume24hUsd: 100_000_000, rawLine: '#BTC buy 3' })] }),
@@ -115,7 +117,9 @@ describe('structured feed pages', () => {
     expect(btcRow).not.toBeNull();
     await user.click(btcRow!);
 
+    expect(window.location.pathname).toBe('/bull');
     expect(screen.getByRole('heading', { name: 'BTC B/S History' })).toBeInTheDocument();
+    expect(document.querySelector('.bs-history-modal-backdrop')?.parentElement).toBe(document.body);
     expect(screen.getByRole('button', { name: 'Close B/S history' })).toHaveTextContent('×');
     expect(screen.getByText('3 hits in 1h')).toBeInTheDocument();
     const dialog = screen.getByRole('dialog');
@@ -173,21 +177,128 @@ describe('structured feed pages', () => {
     expect(within(dialog).getAllByText('Binance').length).toBeGreaterThan(0);
   });
 
-  it('plots a single B/S history hit on the right side of the chart', async () => {
+  it('plots a single B/S history hit on the right side of an unbounded chart window', () => {
+    render(
+      <BsHistoryChart
+        coin="BTC"
+        hits={[{
+          eventId: 'single-spot-buy',
+          receivedAt: '2026-01-01T00:30:00.000Z',
+          feedKey: 'all_spot_top_buy_5m',
+          rank: 1,
+          coin: 'BTC',
+          exchange: null,
+          buyUsd: 2_000_000,
+          sellUsd: 1_000_000,
+          deltaUsd: 1_000_000,
+          buySellRatio: 2,
+          displayRatio: 2,
+          percent: null,
+          volume24hUsd: null,
+          rawLine: '#BTC single buy'
+        }]}
+        comparisonHits={[]}
+        ratioLabel="B/S"
+        comparisonRatioLabel="S/B"
+      />
+    );
+
+    expect(screen.getByLabelText(/B\/S 2\.00x/)).toHaveAttribute('x', '587');
+  });
+
+  it('keeps empty 5-minute slots visible between B/S history bars', () => {
+    const { container } = render(
+      <BsHistoryChart
+        coin="LINK"
+        hits={[
+          {
+            eventId: 'link-spot-buy-1',
+            receivedAt: '2026-01-01T02:14:00.000Z',
+            feedKey: 'all_spot_top_buy_5m',
+            rank: 1,
+            coin: 'LINK',
+            exchange: null,
+            buyUsd: 1_910_000,
+            sellUsd: 1_000_000,
+            deltaUsd: 910_000,
+            buySellRatio: 1.91,
+            displayRatio: 1.91,
+            percent: null,
+            volume24hUsd: null,
+            rawLine: '#LINK 02:14'
+          },
+          {
+            eventId: 'link-spot-buy-2',
+            receivedAt: '2026-01-01T02:24:00.000Z',
+            feedKey: 'all_spot_top_buy_5m',
+            rank: 1,
+            coin: 'LINK',
+            exchange: null,
+            buyUsd: 3_850_000,
+            sellUsd: 1_000_000,
+            deltaUsd: 2_850_000,
+            buySellRatio: 3.85,
+            displayRatio: 3.85,
+            percent: null,
+            volume24hUsd: null,
+            rawLine: '#LINK 02:24'
+          }
+        ]}
+        comparisonHits={[]}
+        ratioLabel="B/S"
+        comparisonRatioLabel="S/B"
+        windowStart="2026-01-01T02:04:00.000Z"
+        windowEnd="2026-01-01T03:04:00.000Z"
+      />
+    );
+
+    expect(screen.getByLabelText(/B\/S 1\.91x/)).toHaveAttribute('x', '136');
+    expect(screen.getByLabelText(/B\/S 1\.91x/)).toHaveAttribute('width', '24');
+    expect(screen.getByLabelText(/B\/S 3\.85x/)).toHaveAttribute('x', '228');
+    expect(container.querySelector('.bs-history-chart-slot-grid[x1="194"]')).not.toBeNull();
+  });
+
+  it('positions B/S popup bars inside the provided hourly history window', async () => {
     const user = userEvent.setup();
     const event = makeEvent('all_spot_top_buy_5m', {
-      id: 'single-spot-buy',
-      receivedAt: '2026-01-01T00:30:00.000Z',
-      entries: [makeEntry({ coin: 'BTC', direction: 'buy', buyUsd: 2_000_000, sellUsd: 1_000_000, buySellRatio: 2, rawLine: '#BTC single buy' })]
+      id: 'spot-buy-hourly-slot',
+      receivedAt: '2026-01-01T01:34:00.000Z',
+      entries: [makeEntry({
+        coin: 'VIRTUAL',
+        direction: 'buy',
+        buyUsd: 4_440_000,
+        sellUsd: 1_000_000,
+        deltaUsd: 3_440_000,
+        buySellRatio: 4.44,
+        volume24hUsd: 80_000_000,
+        rawLine: '#VIRTUAL buy 4.44'
+      })]
     });
 
-    render(<TopTable title="Top 10 Spot Buyers 5m" subtitle="test" event={event} historyEvents={[event]} market="spot" exchangeAvailability={emptyExchangeAvailability()} classificationFilter={[]} performanceTrends={new Map()} highlighted={false} />);
+    render(
+      <TopTable
+        title="Top 10 Spot Buyers 5m"
+        subtitle="test"
+        event={event}
+        historyEvents={[event]}
+        comparisonHistoryEvents={[]}
+        historyWindowStart="2026-01-01T01:04:00.000Z"
+        historyWindowEnd="2026-01-01T02:04:00.000Z"
+        market="spot"
+        exchangeAvailability={emptyExchangeAvailability()}
+        classificationFilter={[]}
+        performanceTrends={new Map()}
+        highlighted={false}
+      />
+    );
 
-    const btcRow = screen.getByText('BTC').closest('tr');
-    expect(btcRow).not.toBeNull();
-    await user.click(btcRow!);
+    const virtualRow = screen.getByText('VIRTUAL').closest('tr');
+    expect(virtualRow).not.toBeNull();
+    await user.click(virtualRow!);
 
-    expect(within(screen.getByRole('dialog')).getByLabelText(/B\/S 2\.00x/)).toHaveAttribute('x', '587');
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByRole('img', { name: /VIRTUAL B\/S and S\/B ratio history/i })).toHaveAttribute('preserveAspectRatio', 'xMidYMid meet');
+    expect(within(dialog).getByLabelText(/B\/S 4\.44x/)).toHaveAttribute('x', '320');
   });
 
   it('renders funding rows from structured entries', () => {

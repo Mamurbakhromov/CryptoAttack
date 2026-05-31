@@ -26,6 +26,16 @@ export const feedKeys = [
 export type FeedKey = (typeof feedKeys)[number];
 export type ExchangeKey = 'binance' | 'bybit' | 'okx' | 'coinbase';
 export type ExchangeMarket = 'spot' | 'perpetual';
+export type TopSpotHistoryMarket = 'spot' | 'perpetual';
+export type TopSpotHistorySide = 'buy' | 'sell';
+export type TopSpotHistoryFeedKey =
+  | 'all_spot_top_buy_5m'
+  | 'all_spot_top_sell_5m'
+  | 'all_derivatives_top_buy_5m'
+  | 'all_derivatives_top_sell_5m';
+export type TopOiHistorySide = 'gainer' | 'loser';
+export type TopOiHistoryFeedKey = 'top_oi_gainers_60m' | 'top_oi_losers_60m';
+export type AmountsHistorySourceKey = 'spot_buy' | 'spot_sell' | 'derivatives_buy' | 'derivatives_sell';
 export type ExchangeSymbolStatus = 'active' | 'inactive' | 'unknown';
 export type ExchangeSymbolSourceStatus = 'idle' | 'ok' | 'error';
 
@@ -238,6 +248,165 @@ export interface StorageStatusResponse {
   workers: WorkerStatusBundle;
 }
 
+export interface ClearEventDataResponse {
+  generatedAt: string;
+  clearedAt: string;
+  inMemory: { cleared: boolean };
+  database: { clearedAt: string; tables: string[] } | null;
+  snapshot: DashboardSnapshot;
+  status: ApiStatus;
+  storageStatus: StorageStatusResponse;
+}
+
+export interface ResetAllStoredDataResponse {
+  generatedAt: string;
+  resetAt: string;
+  inMemory: { cleared: boolean };
+  database: { clearedAt: string; tables: string[] } | null;
+  rawLog: {
+    path: string;
+    cleared: boolean;
+    missing: boolean;
+    bytesBefore: number | null;
+    reason: string | null;
+  };
+  runtime: {
+    clearedPendingScoreCoins: number;
+    clearedActivePriceCoins: number;
+  };
+  snapshot: DashboardSnapshot;
+  status: ApiStatus;
+  storageStatus: StorageStatusResponse;
+  scoreSnapshot: ScoreSnapshotSseEvent;
+}
+
+export interface TopSpotHistoryHit {
+  eventId: string;
+  receivedAt: string;
+  feedKey: FeedKey;
+  rank: number | null;
+  coin: string;
+  market?: string | null;
+  direction?: ParsedTopEntry['direction'] | null;
+  exchange: string | null;
+  amountUsd?: number | null;
+  buyUsd: number | null;
+  sellUsd: number | null;
+  deltaUsd: number | null;
+  buySellRatio: number | null;
+  percent: number | null;
+  priceUsd?: number | null;
+  priceChangePercent?: number | null;
+  oiChange15mPercent?: number | null;
+  oiChange30mPercent?: number | null;
+  volume24hUsd: number | null;
+  rawLine: string;
+}
+
+export interface TopSpotHistorySummary {
+  primaryHitCount: number;
+  comparisonHitCount: number;
+  latestPrimaryRatio: number | null;
+  primaryAverage3: number | null;
+}
+
+export interface TopSpotHistoryResponse {
+  generatedAt: string;
+  enabled: boolean;
+  state?: 'disabled';
+  reason?: 'history_storage_unavailable';
+  coin: string;
+  from: string;
+  to: string;
+  market: TopSpotHistoryMarket;
+  side: TopSpotHistorySide;
+  primaryFeedKey: TopSpotHistoryFeedKey;
+  comparisonFeedKey: TopSpotHistoryFeedKey;
+  hits: TopSpotHistoryHit[];
+  comparisonHits: TopSpotHistoryHit[];
+  summary: TopSpotHistorySummary;
+}
+
+export interface TopOiHistoryResponse {
+  generatedAt: string;
+  enabled: boolean;
+  state?: 'disabled';
+  reason?: 'history_storage_unavailable';
+  coin: string;
+  from: string;
+  to: string;
+  side: TopOiHistorySide;
+  primaryFeedKey: TopOiHistoryFeedKey;
+  comparisonFeedKey: TopOiHistoryFeedKey;
+  hits: TopSpotHistoryHit[];
+  comparisonHits: TopSpotHistoryHit[];
+  summary: TopSpotHistorySummary;
+}
+
+export interface AmountsHistoryResponse {
+  generatedAt: string;
+  enabled: boolean;
+  state?: 'disabled';
+  reason?: 'history_storage_unavailable';
+  coin: string;
+  from: string;
+  to: string;
+  market: TopSpotHistoryMarket;
+  side: TopSpotHistorySide;
+  primaryFeedKey: AmountsHistorySourceKey;
+  comparisonFeedKey: AmountsHistorySourceKey;
+  hits: TopSpotHistoryHit[];
+  comparisonHits: TopSpotHistoryHit[];
+  summary: TopSpotHistorySummary;
+}
+
+export interface TopSpotFeedHistorySnapshot {
+  events: NormalizedEvent[];
+  latest: NormalizedEvent | null;
+}
+
+export interface TopSpotFeedHistoryResponse {
+  generatedAt: string;
+  enabled: boolean;
+  state?: 'disabled';
+  reason?: 'history_storage_unavailable';
+  from: string;
+  to: string;
+  feeds: Record<TopSpotHistoryFeedKey, TopSpotFeedHistorySnapshot>;
+  summary: {
+    eventCount: number;
+    entryCount: number;
+  };
+}
+
+export interface TopOiFeedHistoryResponse {
+  generatedAt: string;
+  enabled: boolean;
+  state?: 'disabled';
+  reason?: 'history_storage_unavailable';
+  from: string;
+  to: string;
+  feeds: Record<TopOiHistoryFeedKey, TopSpotFeedHistorySnapshot>;
+  summary: {
+    eventCount: number;
+    entryCount: number;
+  };
+}
+
+export interface AmountsFeedHistoryResponse {
+  generatedAt: string;
+  enabled: boolean;
+  state?: 'disabled';
+  reason?: 'history_storage_unavailable';
+  from: string;
+  to: string;
+  feeds: Record<AmountsHistorySourceKey, TopSpotFeedHistorySnapshot>;
+  summary: {
+    eventCount: number;
+    entryCount: number;
+  };
+}
+
 export interface StorageOperationalHealth {
   state: 'disabled' | 'healthy' | 'degraded' | 'unhealthy';
   reasons: string[];
@@ -342,6 +511,33 @@ export interface ScoreSummary {
   riskTags: string[];
   evidenceSummary: ScoreEvidenceSummary;
   recentScoreDelta: number | null;
+  scoreState?: ScoreFlowState | string | null;
+  tradeAction?: ScoreTradeAction | string | null;
+  componentScores?: ScoreComponentScores | null;
+  flowBreakdown?: ScoreFlowBreakdownItem[] | null;
+}
+
+export type ScoreFlowState = 'clean_bull' | 'clean_bear' | 'derivatives_only_bull' | 'derivatives_only_bear' | 'hedged_conflict' | 'mixed' | 'thin_liquidity' | 'neutral';
+export type ScoreTradeAction = 'LONG_WATCH' | 'SHORT_WATCH' | 'WATCH' | 'AVOID' | 'NEUTRAL';
+export type ScoreComponentScores = Record<string, { bull: number; bear: number }>;
+
+export interface ScoreFlowBreakdownItem {
+  family?: string;
+  side?: string;
+  score?: number;
+  rawScore?: number;
+  maxScore?: number;
+  multiplier?: number;
+  effectiveHits?: number;
+  rawBeforeCap?: number;
+  volumeCap?: number;
+  activityCap?: number;
+  liquidityCap?: number;
+  hitPoints?: number;
+  subpoints?: Record<string, number | null>;
+  thinLiquidity?: boolean;
+  newestReceivedAt?: string | null;
+  [key: string]: unknown;
 }
 
 export interface ScoreFilters {
@@ -414,6 +610,10 @@ export interface ScoreTimelinePoint {
   scoreHash: string | null;
   evidenceHash: string | null;
   computedAt: string;
+  scoreState?: ScoreFlowState | string | null;
+  tradeAction?: ScoreTradeAction | string | null;
+  componentScores?: ScoreComponentScores | null;
+  flowBreakdown?: ScoreFlowBreakdownItem[] | null;
 }
 
 export interface ScoreTimelineResponse {
@@ -532,6 +732,10 @@ export interface ScoreUpdateSseItem {
   evidenceCount: number;
   scoreHash: string;
   evidenceHash: string;
+  scoreState?: ScoreFlowState | string | null;
+  tradeAction?: ScoreTradeAction | string | null;
+  componentScores?: ScoreComponentScores | null;
+  flowBreakdown?: ScoreFlowBreakdownItem[] | null;
 }
 
 export interface ScoreUpdateSseEvent {

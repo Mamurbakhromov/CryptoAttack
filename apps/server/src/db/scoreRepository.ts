@@ -97,6 +97,11 @@ export interface ScoreEvidenceSummary {
   sides: ScoreSide[];
 }
 
+export type ScoreFlowState = 'clean_bull' | 'clean_bear' | 'derivatives_only_bull' | 'derivatives_only_bear' | 'hedged_conflict' | 'mixed' | 'thin_liquidity' | 'neutral';
+export type ScoreTradeAction = 'LONG_WATCH' | 'SHORT_WATCH' | 'WATCH' | 'AVOID' | 'NEUTRAL';
+export type ScoreComponentScores = Record<string, { bull: number; bear: number }>;
+export type ScoreFlowBreakdown = Array<Record<string, unknown>>;
+
 export interface ScoreSummaryReadModel {
   coin: string;
   scoreConfigVersion: string;
@@ -114,6 +119,10 @@ export interface ScoreSummaryReadModel {
   riskTags: string[];
   evidenceSummary: ScoreEvidenceSummary;
   recentScoreDelta: number | null;
+  scoreState: ScoreFlowState | string | null;
+  tradeAction: ScoreTradeAction | string | null;
+  componentScores: ScoreComponentScores | null;
+  flowBreakdown: ScoreFlowBreakdown | null;
 }
 
 export interface ScoreTimelineReadModel {
@@ -139,6 +148,10 @@ export interface ScoreTimelineReadModel {
   scoreHash: string | null;
   evidenceHash: string | null;
   computedAt: string;
+  scoreState: ScoreFlowState | string | null;
+  tradeAction: ScoreTradeAction | string | null;
+  componentScores: ScoreComponentScores | null;
+  flowBreakdown: ScoreFlowBreakdown | null;
 }
 
 export interface ScoreEvidenceReadModel {
@@ -196,6 +209,7 @@ interface CurrentScoreReadRow extends QueryResultRow {
   feed_keys: string[] | string | null;
   sides: ScoreSide[] | string | null;
   recent_score_delta: number | string | null;
+  snapshot_payload: Record<string, unknown> | null;
 }
 
 interface TimelineReadRow extends QueryResultRow {
@@ -224,6 +238,7 @@ interface TimelineReadRow extends QueryResultRow {
   score_hash: string | null;
   evidence_hash: string | null;
   computed_at: Date | string;
+  snapshot_payload: Record<string, unknown> | null;
 }
 
 interface EvidenceReadRow extends QueryResultRow {
@@ -535,8 +550,9 @@ async function upsertCurrentScore(client: PoolClient, result: ScoreResult): Prom
        net_score,
        confidence_score,
        dominant_signal,
-       market_regime
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       market_regime,
+       snapshot_payload
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      on conflict (score_config_version, window_minutes, coin) do update
      set latest_score_ts = excluded.latest_score_ts,
          bull_score = excluded.bull_score,
@@ -545,6 +561,7 @@ async function upsertCurrentScore(client: PoolClient, result: ScoreResult): Prom
          confidence_score = excluded.confidence_score,
          dominant_signal = excluded.dominant_signal,
          market_regime = excluded.market_regime,
+         snapshot_payload = excluded.snapshot_payload,
          updated_at = now()
      where excluded.latest_score_ts >= coin_score_current.latest_score_ts`,
     [
@@ -557,7 +574,8 @@ async function upsertCurrentScore(client: PoolClient, result: ScoreResult): Prom
       result.netScore,
       result.confidenceScore,
       result.dominantSignal,
-      result.marketRegime
+      result.marketRegime,
+      result.payload
     ]
   );
 }
@@ -669,7 +687,8 @@ function buildCurrentScoresQuery(input: CurrentScoresQuery): BuiltQuery {
                    coalesce(evidence_summary.top_rule_keys, '{}'::text[]) as top_rule_keys,
                    coalesce(evidence_summary.feed_keys, '{}'::text[]) as feed_keys,
                    coalesce(evidence_summary.sides, '{}'::text[]) as sides,
-                   delta.recent_score_delta
+                   delta.recent_score_delta,
+                   c.snapshot_payload
             from coin_score_current c
             left join lateral (${primaryEvidenceSql('c')}) primary_evidence on true
             left join lateral (${evidenceSummarySql('c')}) evidence_summary on true
@@ -729,6 +748,7 @@ function buildTimelineQuery(input: ScoreTimelineQuery): BuiltQuery {
                  filtered.score_hash,
                  filtered.evidence_hash,
                  filtered.computed_at,
+                 filtered.snapshot_payload,
                  primary_evidence.reason as primary_reason,
                  coalesce(evidence_summary.risk_tags, '{}'::text[]) as risk_tags,
                  coalesce(evidence_summary.evidence_total, 0) as evidence_total,
@@ -909,6 +929,7 @@ function addParam(values: unknown[], value: unknown): string {
 }
 
 function currentScoreRowToReadModel(row: CurrentScoreReadRow): ScoreSummaryReadModel {
+  const payload = recordOrNull(row.snapshot_payload);
   return {
     coin: row.coin,
     scoreConfigVersion: row.score_config_version,
@@ -925,11 +946,16 @@ function currentScoreRowToReadModel(row: CurrentScoreReadRow): ScoreSummaryReadM
     primaryReason: row.primary_reason,
     riskTags: stringArray(row.risk_tags),
     evidenceSummary: evidenceSummaryFromRow(row),
-    recentScoreDelta: numberOrNull(row.recent_score_delta)
+    recentScoreDelta: numberOrNull(row.recent_score_delta),
+    scoreState: stringPayloadValue(payload, 'scoreState'),
+    tradeAction: stringPayloadValue(payload, 'tradeAction'),
+    componentScores: componentScoresFromPayload(payload),
+    flowBreakdown: flowBreakdownFromPayload(payload)
   };
 }
 
 function timelineRowToReadModel(row: TimelineReadRow): ScoreTimelineReadModel {
+  const payload = recordOrNull(row.snapshot_payload);
   return {
     scoreSnapshotId: row.score_snapshot_id,
     ts: normalizeDbDate(row.ts),
@@ -952,7 +978,11 @@ function timelineRowToReadModel(row: TimelineReadRow): ScoreTimelineReadModel {
     recentScoreDelta: numberOrNull(row.recent_score_delta),
     scoreHash: row.score_hash,
     evidenceHash: row.evidence_hash,
-    computedAt: normalizeDbDate(row.computed_at)
+    computedAt: normalizeDbDate(row.computed_at),
+    scoreState: stringPayloadValue(payload, 'scoreState'),
+    tradeAction: stringPayloadValue(payload, 'tradeAction'),
+    componentScores: componentScoresFromPayload(payload),
+    flowBreakdown: flowBreakdownFromPayload(payload)
   };
 }
 
@@ -1035,6 +1065,36 @@ function isScoreSide(value: string): value is ScoreSide {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function recordOrNull(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) ? value : null;
+}
+
+function stringPayloadValue(payload: Record<string, unknown> | null, key: string): string | null {
+  const value = payload?.[key];
+  return typeof value === 'string' && value ? value : null;
+}
+
+function componentScoresFromPayload(payload: Record<string, unknown> | null): ScoreComponentScores | null {
+  const value = payload?.componentScores;
+  if (!isRecord(value)) return null;
+  const componentScores: ScoreComponentScores = {};
+  for (const [family, sideScores] of Object.entries(value)) {
+    if (!isRecord(sideScores)) continue;
+    componentScores[family] = {
+      bull: numberOrZero(sideScores.bull as number | string | null | undefined),
+      bear: numberOrZero(sideScores.bear as number | string | null | undefined)
+    };
+  }
+  return Object.keys(componentScores).length ? componentScores : null;
+}
+
+function flowBreakdownFromPayload(payload: Record<string, unknown> | null): ScoreFlowBreakdown | null {
+  const value = payload?.flowBreakdown;
+  if (!Array.isArray(value)) return null;
+  const rows = value.filter(isRecord);
+  return rows.length ? rows : null;
 }
 
 function entryRowToSource(row: EntrySourceRow): ScoreSourceRow {

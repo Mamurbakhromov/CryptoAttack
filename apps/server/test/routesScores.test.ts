@@ -21,7 +21,7 @@ describe('score API routes', () => {
 
     expect(response.statusCode).toBe(200);
     expect(repository.getCurrentScores).toHaveBeenCalledWith(expect.objectContaining({
-      scoreConfigVersion: 'rule-v1',
+      scoreConfigVersion: 'flow-v2',
       windowMinutes: 15,
       side: 'bull',
       limit: 2,
@@ -173,6 +173,10 @@ function makeScoreSummary(overrides: Partial<ScoreSummaryReadModel> = {}): Score
     riskTags: ['positive_funding_overheated'],
     evidenceSummary: { total: 3, topRuleKeys: ['price_alert_up'], feedKeys: ['pricealerts'], sides: ['bull'] },
     recentScoreDelta: 12.25,
+    scoreState: null,
+    tradeAction: null,
+    componentScores: null,
+    flowBreakdown: null,
     ...overrides
   };
 }
@@ -201,7 +205,11 @@ function makeTimelinePoint(): ScoreTimelineReadModel {
     netScoreDelta: 12.25,
     scoreHash: 'score-hash',
     evidenceHash: 'evidence-hash',
-    computedAt: '2026-01-01T00:15:01.000Z'
+    computedAt: '2026-01-01T00:15:01.000Z',
+    scoreState: summary.scoreState,
+    tradeAction: summary.tradeAction,
+    componentScores: summary.componentScores,
+    flowBreakdown: summary.flowBreakdown
   };
 }
 

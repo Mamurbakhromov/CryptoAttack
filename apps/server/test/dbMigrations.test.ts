@@ -112,6 +112,9 @@ describe('database migrations', () => {
     const forwardReturnIdentitySql = await readFile(new URL('../migrations/000007_forward_return_identity.sql', import.meta.url), 'utf8');
     expect(forwardReturnIdentitySql).toContain('alter table forward_returns drop constraint if exists forward_returns_pkey');
     expect(forwardReturnIdentitySql).toContain('create unique index if not exists forward_returns_event_horizon_null_entry_idx');
+    const currentScorePayloadSql = await readFile(new URL('../migrations/000008_current_score_payload.sql', import.meta.url), 'utf8');
+    expect(currentScorePayloadSql).toContain("alter table coin_score_current add column if not exists snapshot_payload jsonb not null default '{}'::jsonb");
+    expect(currentScorePayloadSql).toContain('update coin_score_current c');
   });
 });
 

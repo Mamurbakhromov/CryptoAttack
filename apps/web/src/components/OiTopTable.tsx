@@ -1,4 +1,5 @@
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { getCoinClassificationClasses, getCoinClassificationFilterLabel, isCoinClassificationFilterActive, matchesCoinClassificationFilter, type CoinClassificationFilter } from '../coinClassification';
 import type { NormalizedEvent } from '../types';
@@ -19,9 +20,12 @@ interface OiTopTableProps {
   hoveredCoin?: string | null;
   onCoinHover?: (coin: string | null) => void;
   highlighted: boolean;
+  maxRows?: number | null;
+  historyWindowStart?: string | Date | undefined;
+  historyWindowEnd?: string | Date | undefined;
 }
 
-interface OiHistoryHit {
+export interface OiHistoryHit {
   eventId: string;
   receivedAt: string;
   title: string;
@@ -56,15 +60,16 @@ interface OiChartData {
 
 const HISTORY_WINDOW_MS = 60 * 60 * 1_000;
 
-export function OiTopTable({ title, subtitle, event, historyEvents = [], exchangeAvailability, classificationFilter, performanceTrends, hoveredCoin = null, onCoinHover, highlighted }: OiTopTableProps) {
+export function OiTopTable({ title, subtitle, event, historyEvents = [], exchangeAvailability, classificationFilter, performanceTrends, hoveredCoin = null, onCoinHover, highlighted, maxRows = 10, historyWindowStart, historyWindowEnd }: OiTopTableProps) {
   const [selectedCoin, setSelectedCoin] = useState<string | null>(null);
   const rawEntries = event?.entries ?? [];
   const entries = rawEntries.filter((entry) => matchesCoinClassificationFilter(entry.coin, classificationFilter));
   const sourceEvents = historyEvents.length ? historyEvents : event ? [event] : [];
   const hitCounts = countCoinHitsLastHour(sourceEvents, event);
-  const oiHistories = buildOiHistoriesLastHour(sourceEvents, event);
+  const oiHistories = buildOiHistoriesLastHour(sourceEvents, event, historyWindowStart, historyWindowEnd);
   const selectedHistory = selectedCoin ? oiHistories.get(selectedCoin) ?? [] : [];
   const isLoserTable = entries[0]?.direction === 'loser';
+  const renderedEntries = maxRows === null ? entries : entries.slice(0, maxRows);
 
   useEffect(() => {
     if (!selectedCoin) return;
@@ -106,7 +111,7 @@ export function OiTopTable({ title, subtitle, event, historyEvents = [], exchang
               </tr>
             </thead>
             <tbody>
-              {entries.slice(0, 10).map((entry, index) => {
+              {renderedEntries.map((entry, index) => {
                 const classificationClasses = getCoinClassificationClasses(entry.coin);
                 const isLinked = Boolean(entry.coin && entry.coin === hoveredCoin);
                 const exchangeChips = getCoinExchangeChips(entry.coin, 'perpetual', exchangeAvailability, entry.exchange);
@@ -159,12 +164,12 @@ export function OiTopTable({ title, subtitle, event, historyEvents = [], exchang
       ) : (
           <div className="empty-state">Waiting for first matching event</div>
       )}
-      {selectedCoin ? <OiHistoryModal coin={selectedCoin} hits={selectedHistory} onClose={() => setSelectedCoin(null)} /> : null}
+      {selectedCoin ? createPortal(<OiHistoryModal coin={selectedCoin} hits={selectedHistory} windowStart={historyWindowStart} windowEnd={historyWindowEnd} onClose={() => setSelectedCoin(null)} />, document.body) : null}
     </section>
   );
 }
 
-function OiHistoryModal({ coin, hits, onClose }: { coin: string; hits: OiHistoryHit[]; onClose: () => void }) {
+function OiHistoryModal({ coin, hits, windowStart, windowEnd, onClose }: { coin: string; hits: OiHistoryHit[]; windowStart?: string | Date | undefined; windowEnd?: string | Date | undefined; onClose: () => void }) {
   const [view, setView] = useState<'graph' | 'details'>('graph');
 
   return (
@@ -192,7 +197,7 @@ function OiHistoryModal({ coin, hits, onClose }: { coin: string; hits: OiHistory
 
           {hits.length ? (
             <div className={`bs-history-content ${view}`}>
-              {view === 'graph' ? <OiHistoryChart coin={coin} hits={hits} /> : <OiHistoryDetailsTable hits={hits} />}
+              {view === 'graph' ? <OiHistoryChart coin={coin} hits={hits} windowStart={windowStart} windowEnd={windowEnd} /> : <OiHistoryDetailsTable hits={hits} />}
             </div>
           ) : <div className="empty-state">No OI hits found for {coin} in the latest 1h window.</div>}
         </section>
@@ -201,8 +206,8 @@ function OiHistoryModal({ coin, hits, onClose }: { coin: string; hits: OiHistory
   );
 }
 
-function OiHistoryChart({ coin, hits }: { coin: string; hits: OiHistoryHit[] }) {
-  const chart = buildOiChart(hits);
+export function OiHistoryChart({ coin, hits, windowStart, windowEnd }: { coin: string; hits: OiHistoryHit[]; windowStart?: string | Date | undefined; windowEnd?: string | Date | undefined }) {
+  const chart = buildOiChart(hits, windowStart, windowEnd);
   const priceLine = chart.points.filter((point): point is OiChartPoint & { priceY: number; priceChangePercent: number } => point.priceY !== null && point.priceChangePercent !== null);
   const latestPrice = hits[0]?.priceChangePercent ?? null;
 
@@ -219,7 +224,7 @@ function OiHistoryChart({ coin, hits }: { coin: string; hits: OiHistoryHit[] }) 
         <span><i className="price" />Price %</span>
         <span><i className="rolling" />Rolling price 3</span>
       </div>
-      <svg className="bs-history-chart" viewBox="0 0 640 220" preserveAspectRatio="none" role="img" aria-label={`${coin} OI and price percent history chart from -${chart.maxPercentLabel} to ${chart.maxPercentLabel}`}>
+      <svg className="bs-history-chart" viewBox="0 0 640 220" preserveAspectRatio="xMidYMid meet" role="img" aria-label={`${coin} OI and price percent history chart from -${chart.maxPercentLabel} to ${chart.maxPercentLabel}`}>
         <line className="bs-history-chart-grid" x1="56" y1="24" x2="608" y2="24" />
         <line className="bs-history-chart-grid" x1="56" y1={chart.positiveMidY} x2="608" y2={chart.positiveMidY} />
         <line className="bs-history-chart-grid" x1="56" y1="96" x2="608" y2="96" />
@@ -263,7 +268,7 @@ function OiHistoryChart({ coin, hits }: { coin: string; hits: OiHistoryHit[] }) 
   );
 }
 
-function OiHistoryDetailsTable({ hits }: { hits: OiHistoryHit[] }) {
+export function OiHistoryDetailsTable({ hits }: { hits: OiHistoryHit[] }) {
   return (
     <div className="bs-history-table-panel">
       <div className="bs-history-table-title">
@@ -298,14 +303,18 @@ function OiHistoryDetailsTable({ hits }: { hits: OiHistoryHit[] }) {
   );
 }
 
-function buildOiHistoriesLastHour(events: NormalizedEvent[], referenceEvent: NormalizedEvent | null): Map<string, OiHistoryHit[]> {
+function buildOiHistoriesLastHour(events: NormalizedEvent[], referenceEvent: NormalizedEvent | null, windowStart?: string | Date | undefined, windowEnd?: string | Date | undefined): Map<string, OiHistoryHit[]> {
+  const explicitStartMs = parseTimeInput(windowStart);
+  const explicitEndMs = parseTimeInput(windowEnd);
+  const hasExplicitWindow = explicitStartMs !== null && explicitEndMs !== null;
   const referenceMs = parseTime(referenceEvent?.receivedAt) ?? Date.now();
-  const cutoffMs = referenceMs - 60 * 60 * 1_000;
+  const cutoffMs = explicitStartMs ?? referenceMs - 60 * 60 * 1_000;
+  const ceilingMs = explicitEndMs ?? referenceMs;
   const histories = new Map<string, OiHistoryHit[]>();
 
   for (const event of events) {
     const eventMs = parseTime(event.receivedAt);
-    if (eventMs === null || eventMs < cutoffMs || eventMs > referenceMs) continue;
+    if (eventMs === null || eventMs < cutoffMs || (hasExplicitWindow ? eventMs >= ceilingMs : eventMs > ceilingMs)) continue;
 
     for (const entry of event.entries) {
       if (!entry.coin) continue;
@@ -332,21 +341,24 @@ function buildOiHistoriesLastHour(events: NormalizedEvent[], referenceEvent: Nor
   return histories;
 }
 
-function buildOiChart(hits: OiHistoryHit[]): OiChartData {
+function buildOiChart(hits: OiHistoryHit[], windowStart?: string | Date | undefined, windowEnd?: string | Date | undefined): OiChartData {
   const ordered: Array<OiHistoryHit & { time: number }> = hits
     .flatMap((hit) => {
       const time = parseTime(hit.receivedAt);
       return time === null ? [] : [{ ...hit, time }];
     })
     .sort((left, right) => left.time - right.time);
-  const maxTime = ordered.at(-1)?.time ?? Date.now();
-  const minTime = maxTime - HISTORY_WINDOW_MS;
-  const timeRange = HISTORY_WINDOW_MS;
+  const explicitStartMs = parseTimeInput(windowStart);
+  const explicitEndMs = parseTimeInput(windowEnd);
+  const maxTime = explicitEndMs ?? ordered.at(-1)?.time ?? Date.now();
+  const minTime = explicitStartMs ?? maxTime - HISTORY_WINDOW_MS;
+  const timeRange = Math.max(1, maxTime - minTime);
+  const hasExplicitWindow = explicitStartMs !== null && explicitEndMs !== null;
   const values = ordered.flatMap((hit) => [hit.oiChangePercent, hit.priceChangePercent]).filter((value): value is number => value !== null && Number.isFinite(value));
   const maxPercent = Math.max(3, ...values.map((value) => Math.abs(value)));
   const percentScaleMax = maxPercent > 3 ? Math.ceil(maxPercent) : 3;
   const points = ordered.map((hit) => {
-    const x = ordered.length === 1 ? 608 : 56 + ((hit.time - minTime) / timeRange) * 552;
+    const x = !hasExplicitWindow && ordered.length === 1 ? 608 : 56 + ((hit.time - minTime) / timeRange) * 552;
     return {
       x: Math.round(x * 10) / 10,
       oiY: percentAxisY(hit.oiChangePercent ?? 0, percentScaleMax),
@@ -359,7 +371,7 @@ function buildOiChart(hits: OiHistoryHit[]): OiChartData {
 
   return {
     points,
-    rollingPricePoints: buildRollingPricePoints(ordered, minTime, timeRange, percentScaleMax),
+    rollingPricePoints: buildRollingPricePoints(ordered, minTime, timeRange, percentScaleMax, hasExplicitWindow),
     startLabel: formatAxisTime(minTime),
     endLabel: formatAxisTime(maxTime),
     maxPercentLabel: formatPercentAxisTick(percentScaleMax),
@@ -373,13 +385,14 @@ function buildRollingPricePoints(
   ordered: Array<OiHistoryHit & { time: number }>,
   minTime: number,
   timeRange: number,
-  percentScaleMax: number
+  percentScaleMax: number,
+  hasExplicitWindow: boolean
 ): Array<{ x: number; y: number; time: number; value: number }> {
   const pricePoints = ordered.filter((hit): hit is OiHistoryHit & { time: number; priceChangePercent: number } => hit.priceChangePercent !== null && Number.isFinite(hit.priceChangePercent));
   return pricePoints.map((hit, index) => {
     const window = pricePoints.slice(Math.max(0, index - 2), index + 1);
     const average = window.reduce((sum, item) => sum + item.priceChangePercent, 0) / window.length;
-    const x = pricePoints.length === 1 ? 608 : 56 + ((hit.time - minTime) / timeRange) * 552;
+    const x = !hasExplicitWindow && pricePoints.length === 1 ? 608 : 56 + ((hit.time - minTime) / timeRange) * 552;
     return { x: Math.round(x * 10) / 10, y: percentAxisY(average, percentScaleMax), time: hit.time, value: average };
   });
 }
@@ -413,6 +426,12 @@ function finiteNumber(value: number | null | undefined): number | null {
 function parseTime(value: string | null | undefined): number | null {
   if (!value) return null;
   const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseTimeInput(value: string | Date | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = value instanceof Date ? value.getTime() : Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 

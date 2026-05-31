@@ -120,6 +120,21 @@ export class EventStore extends EventEmitter {
       .slice(0, boundedLimit);
   }
 
+  clearEventData(): void {
+    for (const feedKey of feedKeys) {
+      this.buffers.set(feedKey, []);
+      this.counters.byFeed[feedKey] = 0;
+    }
+    this.dedupe.clear();
+    this.counters.received = 0;
+    this.counters.stored = 0;
+    this.counters.deduplicated = 0;
+    for (const key of Object.keys(this.lastEventByCategory)) delete this.lastEventByCategory[key];
+    this.latencySamples.length = 0;
+    this.lastEventTime = null;
+    this.emit('status', this.getStatus());
+  }
+
   getStats() {
     return {
       counters: this.getCounters(),

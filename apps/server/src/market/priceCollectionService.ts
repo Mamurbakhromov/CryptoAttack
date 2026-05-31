@@ -147,6 +147,12 @@ export class PriceCollectionService {
     };
   }
 
+  resetRuntimeState(): { clearedActiveCoins: number } {
+    const clearedActiveCoins = this.activeCoins.size;
+    this.activeCoins.clear();
+    return { clearedActiveCoins };
+  }
+
   private async resolveActiveCoins(): Promise<string[]> {
     const now = Date.now();
     this.pruneActiveCoins(now);

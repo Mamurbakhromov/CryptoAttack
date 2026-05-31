@@ -1,4 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
+import { stat, truncate } from 'node:fs/promises';
+import { resolve } from 'node:path';
 
 import cors from '@fastify/cors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -9,8 +11,22 @@ import { disabledBacktestEnvelope, type BacktestService } from '../backtest/back
 import type { BacktestBucketQuery, BacktestCoinQuery, BacktestQuery, BacktestRulesQuery, BacktestSummaryQuery } from '../backtest/types.js';
 import type { AppConfig } from '../config.js';
 import { disabledDurableIngestionStatus, type DurableIngestionStatus } from '../db/durableIngestion.js';
+import type { ClearEventDataResult } from '../db/eventRepository.js';
 import type { CurrentScoresQuery, ScoreQuerySide, ScoreReadFilters, ScoreRepository, ScoreSummaryReadModel } from '../db/scoreRepository.js';
 import { disabledDatabaseHealth, type DatabaseHealthSnapshot } from '../db/storageHealth.js';
+import {
+  disabledAmountsFeedHistoryResponse,
+  disabledAmountsHistoryResponse,
+  disabledTopOiFeedHistoryResponse,
+  disabledTopOiHistoryResponse,
+  disabledTopSpotFeedHistoryResponse,
+  disabledTopSpotHistoryResponse,
+  type AmountsHistoryQuery,
+  type TopOiHistoryQuery,
+  type TopSpotFeedHistoryQuery,
+  type TopSpotHistoryQuery,
+  type TopSpotHistoryRepository
+} from '../db/topSpotHistoryRepository.js';
 import type { SpotPerformanceService } from '../exchanges/spotPerformance.js';
 import type { ExchangeSymbolCache } from '../exchanges/symbolCache.js';
 import { exchangeKeys, exchangeMarkets } from '../exchanges/types.js';
@@ -60,6 +76,7 @@ const OptionalBooleanQuerySchema = z.preprocess((value) => {
 }, z.boolean().optional());
 
 const OptionalIsoDateQuerySchema = z.string().trim().refine((value) => Number.isFinite(Date.parse(value)), 'Invalid date').transform((value) => new Date(value).toISOString()).optional();
+const IsoDateQuerySchema = z.string().trim().refine((value) => Number.isFinite(Date.parse(value)), 'Invalid date').transform((value) => new Date(value).toISOString());
 
 const ScoreListQuerySchema = z.object({
   side: z.enum(['bull', 'bear', 'net']).default('net'),
@@ -75,6 +92,24 @@ const ScoreListQuerySchema = z.object({
 
 const ScoreCoinParamsSchema = z.object({
   coin: z.string().trim().regex(/^[a-z0-9]{1,30}$/i).transform((value) => value.toUpperCase())
+});
+
+const TopSpotHistoryQuerySchema = z.object({
+  from: IsoDateQuerySchema,
+  to: IsoDateQuerySchema,
+  market: z.enum(['spot', 'perpetual']),
+  side: z.enum(['buy', 'sell'])
+});
+
+const TopOiHistoryQuerySchema = z.object({
+  from: IsoDateQuerySchema,
+  to: IsoDateQuerySchema,
+  side: z.enum(['gainer', 'loser'])
+});
+
+const TopSpotFeedHistoryQuerySchema = z.object({
+  from: IsoDateQuerySchema,
+  to: IsoDateQuerySchema
 });
 
 const ScoreConfigQuerySchema = z.object({
@@ -127,14 +162,33 @@ const BacktestCoinQuerySchema = BacktestCommonQuerySchema.extend({
   sort: z.enum(['scoreTs_desc', 'return_desc', 'return_asc', 'abs_score_desc']).default('scoreTs_desc')
 });
 
+interface RuntimeResetResult {
+  clearedPendingScoreCoins: number;
+  clearedActivePriceCoins: number;
+}
+
+interface RawLogResetResult {
+  path: string;
+  cleared: boolean;
+  missing: boolean;
+  bytesBefore: number | null;
+  reason: string | null;
+}
+
 interface RouteDeps {
   config: AppConfig;
   store: EventStore;
   sseHub: SseHub;
   symbolCache: ExchangeSymbolCache;
   spotPerformance: SpotPerformanceService;
+  eventMaintenance?: { clearEventData(): Promise<ClearEventDataResult>; clearAllStoredData(): Promise<ClearEventDataResult> } | null;
   scoreRepository?: ScoreRepository | null;
   backtestService?: BacktestService | null;
+  topSpotHistoryRepository?: Pick<
+    TopSpotHistoryRepository,
+    'getTopSpotFeedHistory' | 'getTopSpotHistory' | 'getTopOiFeedHistory' | 'getTopOiHistory' | 'getAmountsFeedHistory' | 'getAmountsHistory'
+  > | null;
+  resetRuntimeState?: () => RuntimeResetResult;
   getStorageStatus?: () => DurableIngestionStatus;
   getWorkerStatus?: () => { priceCollection: WorkerStatus; forwardReturns: WorkerStatus; scores: ScoreWorkerStatus };
   getDatabaseHealth?: () => Promise<DatabaseHealthSnapshot | null> | DatabaseHealthSnapshot | null;
@@ -144,7 +198,7 @@ interface RouteDeps {
 export async function registerHttpRoutes(app: FastifyInstance, deps: RouteDeps): Promise<void> {
   await app.register(cors, {
     origin: deps.config.webOrigin === '*' ? true : deps.config.webOrigin,
-    methods: ['GET', 'POST'],
+    methods: ['GET', 'POST', 'DELETE'],
     credentials: false
   });
 
@@ -197,10 +251,175 @@ export async function registerHttpRoutes(app: FastifyInstance, deps: RouteDeps):
 
   app.get('/api/storage/status', { preHandler: requireAuth }, async () => buildStorageStatusResponse(deps, getStorageStatus(), getWorkerStatus()));
 
+  app.delete('/api/storage/events', { preHandler: requireAuth }, async (_request, reply) => {
+    const storage = getStorageStatus();
+    if (storage.queueDepth > 0 || storage.inFlight > 0) {
+      return reply.code(409).send({
+        error: 'Storage writer is busy',
+        reason: 'storage_writer_busy',
+        queueDepth: storage.queueDepth,
+        inFlight: storage.inFlight
+      });
+    }
+
+    if (deps.config.database.storageEnabled && !deps.eventMaintenance) {
+      return reply.code(503).send({
+        error: 'Database event maintenance is unavailable',
+        reason: 'event_storage_unavailable'
+      });
+    }
+
+    const database = deps.eventMaintenance ? await deps.eventMaintenance.clearEventData() : null;
+    deps.store.clearEventData();
+    deps.sseHub.broadcastSnapshot();
+    const storageStatus = await buildStorageStatusResponse(deps, getStorageStatus(), getWorkerStatus());
+    deps.sseHub.broadcastStorageStatus({
+      generatedAt: storageStatus.generatedAt,
+      storage: storageStatus.storage,
+      workers: storageStatus.workers
+    });
+
+    return {
+      generatedAt: new Date().toISOString(),
+      clearedAt: database?.clearedAt ?? new Date().toISOString(),
+      inMemory: { cleared: true },
+      database,
+      snapshot: deps.store.getSnapshot(),
+      status: {
+        ...deps.store.getStatus(),
+        ...storageStatus
+      },
+      storageStatus
+    };
+  });
+
+  app.delete('/api/storage/all-data', { preHandler: requireAuth }, async (_request, reply) => {
+    const storage = getStorageStatus();
+    const workers = getWorkerStatus();
+    const busy = getFullResetBusyState(storage, workers);
+    if (busy) return reply.code(409).send(busy);
+
+    if (deps.config.database.storageEnabled && !deps.eventMaintenance) {
+      return reply.code(503).send({
+        error: 'Database event maintenance is unavailable',
+        reason: 'event_storage_unavailable'
+      });
+    }
+
+    const runtime = deps.resetRuntimeState?.() ?? { clearedPendingScoreCoins: 0, clearedActivePriceCoins: 0 };
+    const database = deps.eventMaintenance ? await deps.eventMaintenance.clearAllStoredData() : null;
+    const rawLog = await resetRawEventLog(deps.config);
+    deps.store.clearEventData();
+    deps.sseHub.broadcastSnapshot();
+    const storageStatus = await buildStorageStatusResponse(deps, getStorageStatus(), getWorkerStatus());
+    deps.sseHub.broadcastStorageStatus({
+      generatedAt: storageStatus.generatedAt,
+      storage: storageStatus.storage,
+      workers: storageStatus.workers
+    });
+    const scoreSnapshot = {
+      generatedAt: storageStatus.generatedAt,
+      scoreVersion: storageStatus.workers.scores.scoreVersion,
+      asOf: null,
+      windowsMinutes: storageStatus.workers.scores.windowsMinutes,
+      scores: [],
+      health: storageStatus.workers.scores
+    };
+    deps.sseHub.broadcastScoreSnapshot(scoreSnapshot);
+
+    return {
+      generatedAt: new Date().toISOString(),
+      resetAt: database?.clearedAt ?? new Date().toISOString(),
+      inMemory: { cleared: true },
+      database,
+      rawLog,
+      runtime,
+      snapshot: deps.store.getSnapshot(),
+      status: {
+        ...deps.store.getStatus(),
+        ...storageStatus
+      },
+      storageStatus,
+      scoreSnapshot
+    };
+  });
+
   app.get('/api/workers/status', { preHandler: requireAuth }, async () => ({
     generatedAt: new Date().toISOString(),
     workers: getWorkerStatus()
   }));
+
+  app.get('/api/history/top-spot', { preHandler: requireAuth }, async (request, reply) => {
+    const parsed = TopSpotFeedHistoryQuerySchema.safeParse(request.query);
+    if (!parsed.success) return invalidQuery(reply, parsed.error);
+    const query: TopSpotFeedHistoryQuery = parsed.data;
+    if (Date.parse(query.from) >= Date.parse(query.to)) {
+      return reply.code(400).send({ error: 'Invalid query', details: { fieldErrors: { to: ['to must be later than from'] } } });
+    }
+    if (!deps.topSpotHistoryRepository) return disabledTopSpotFeedHistoryResponse(query);
+    return deps.topSpotHistoryRepository.getTopSpotFeedHistory(query);
+  });
+
+  app.get('/api/history/top-spot/:coin', { preHandler: requireAuth }, async (request, reply) => {
+    const params = ScoreCoinParamsSchema.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: 'Invalid coin', details: params.error.flatten() });
+    const parsed = TopSpotHistoryQuerySchema.safeParse(request.query);
+    if (!parsed.success) return invalidQuery(reply, parsed.error);
+    const query: TopSpotHistoryQuery = { coin: params.data.coin, ...parsed.data };
+    if (Date.parse(query.from) >= Date.parse(query.to)) {
+      return reply.code(400).send({ error: 'Invalid query', details: { fieldErrors: { to: ['to must be later than from'] } } });
+    }
+    if (!deps.topSpotHistoryRepository) return disabledTopSpotHistoryResponse(query);
+    return deps.topSpotHistoryRepository.getTopSpotHistory(query);
+  });
+
+  app.get('/api/history/top-oi', { preHandler: requireAuth }, async (request, reply) => {
+    const parsed = TopSpotFeedHistoryQuerySchema.safeParse(request.query);
+    if (!parsed.success) return invalidQuery(reply, parsed.error);
+    const query: TopSpotFeedHistoryQuery = parsed.data;
+    if (Date.parse(query.from) >= Date.parse(query.to)) {
+      return reply.code(400).send({ error: 'Invalid query', details: { fieldErrors: { to: ['to must be later than from'] } } });
+    }
+    if (!deps.topSpotHistoryRepository) return disabledTopOiFeedHistoryResponse(query);
+    return deps.topSpotHistoryRepository.getTopOiFeedHistory(query);
+  });
+
+  app.get('/api/history/top-oi/:coin', { preHandler: requireAuth }, async (request, reply) => {
+    const params = ScoreCoinParamsSchema.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: 'Invalid coin', details: params.error.flatten() });
+    const parsed = TopOiHistoryQuerySchema.safeParse(request.query);
+    if (!parsed.success) return invalidQuery(reply, parsed.error);
+    const query: TopOiHistoryQuery = { coin: params.data.coin, ...parsed.data };
+    if (Date.parse(query.from) >= Date.parse(query.to)) {
+      return reply.code(400).send({ error: 'Invalid query', details: { fieldErrors: { to: ['to must be later than from'] } } });
+    }
+    if (!deps.topSpotHistoryRepository) return disabledTopOiHistoryResponse(query);
+    return deps.topSpotHistoryRepository.getTopOiHistory(query);
+  });
+
+  app.get('/api/history/amounts', { preHandler: requireAuth }, async (request, reply) => {
+    const parsed = TopSpotFeedHistoryQuerySchema.safeParse(request.query);
+    if (!parsed.success) return invalidQuery(reply, parsed.error);
+    const query: TopSpotFeedHistoryQuery = parsed.data;
+    if (Date.parse(query.from) >= Date.parse(query.to)) {
+      return reply.code(400).send({ error: 'Invalid query', details: { fieldErrors: { to: ['to must be later than from'] } } });
+    }
+    if (!deps.topSpotHistoryRepository) return disabledAmountsFeedHistoryResponse(query);
+    return deps.topSpotHistoryRepository.getAmountsFeedHistory(query);
+  });
+
+  app.get('/api/history/amounts/:coin', { preHandler: requireAuth }, async (request, reply) => {
+    const params = ScoreCoinParamsSchema.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: 'Invalid coin', details: params.error.flatten() });
+    const parsed = TopSpotHistoryQuerySchema.safeParse(request.query);
+    if (!parsed.success) return invalidQuery(reply, parsed.error);
+    const query: AmountsHistoryQuery = { coin: params.data.coin, ...parsed.data };
+    if (Date.parse(query.from) >= Date.parse(query.to)) {
+      return reply.code(400).send({ error: 'Invalid query', details: { fieldErrors: { to: ['to must be later than from'] } } });
+    }
+    if (!deps.topSpotHistoryRepository) return disabledAmountsHistoryResponse(query);
+    return deps.topSpotHistoryRepository.getAmountsHistory(query);
+  });
 
   app.get('/api/backtest/summary', { preHandler: requireAuth }, async (request, reply) => {
     const parsed = BacktestSummaryQuerySchema.safeParse(request.query);
@@ -517,10 +736,62 @@ function summarizeOperationalHealth(storage: DurableIngestionStatus, workers: { 
   return { state, reasons };
 }
 
+function getFullResetBusyState(storage: DurableIngestionStatus, workers: { priceCollection: WorkerStatus; forwardReturns: WorkerStatus; scores: ScoreWorkerStatus }) {
+  if (storage.queueDepth > 0 || storage.inFlight > 0) {
+    return {
+      error: 'Storage writer is busy',
+      reason: 'storage_writer_busy',
+      queueDepth: storage.queueDepth,
+      inFlight: storage.inFlight
+    };
+  }
+  if (workers.scores.running) {
+    return {
+      error: 'Score worker is running',
+      reason: 'score_worker_running'
+    };
+  }
+  if (workers.priceCollection.running) {
+    return {
+      error: 'Price collection worker is running',
+      reason: 'price_collection_running'
+    };
+  }
+  if (workers.forwardReturns.running) {
+    return {
+      error: 'Forward return worker is running',
+      reason: 'forward_return_worker_running'
+    };
+  }
+  return null;
+}
+
+async function resetRawEventLog(config: AppConfig): Promise<RawLogResetResult> {
+  const path = resolve(process.cwd(), config.rawEventLogPath);
+  if (!config.logRawEvents) {
+    return { path, cleared: false, missing: false, bytesBefore: null, reason: 'raw_logging_disabled' };
+  }
+
+  try {
+    const before = await stat(path);
+    await truncate(path, 0);
+    return { path, cleared: true, missing: false, bytesBefore: before.size, reason: null };
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') {
+      return { path, cleared: false, missing: true, bytesBefore: null, reason: 'raw_log_missing' };
+    }
+    throw error;
+  }
+}
+
 function isAfter(left: string | null, right: string | null): boolean {
   if (!left) return false;
   if (!right) return true;
   return Date.parse(left) > Date.parse(right);
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === 'object' && error !== null && 'code' in error;
 }
 
 function isStale(value: string | null, staleAfterMs: number): boolean {

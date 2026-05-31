@@ -1,9 +1,11 @@
-import { type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, useEffect, useState } from 'react';
+import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import type { ExchangeMarket, NormalizedEvent } from '../types';
 import { getCoinClassificationClasses, getCoinClassificationFilterLabel, isCoinClassificationFilterActive, matchesCoinClassificationFilter, type CoinClassificationFilter } from '../coinClassification';
 import { ExchangeChips, getCoinExchangeChips, type ExchangeAvailabilityByMarket } from './ExchangeChips';
 import { formatMoney, formatTime } from './format';
+import { BsHistoryChart, BsHistoryDetailsTable, buildRatioAverages, formatAverageRatio, type RatioAverage, type RatioHistoryHit } from './BsHistoryPanel';
 import { PerformanceTrendChips, type PerformanceTrendByCoin } from './PerformanceTrendChips';
 import { RawEventPanel } from './RawEventPanel';
 import { countCoinHitsLastHour, formatHitCount } from './topHits';
@@ -22,65 +24,16 @@ interface TopTableProps {
   onCoinHover?: (coin: string | null) => void;
   highlighted: boolean;
   compact?: boolean;
+  maxRows?: number | null;
+  historyWindowStart?: string | Date | undefined;
+  historyWindowEnd?: string | Date | undefined;
 }
 
 type TopTableSortKey = 'hits' | 'ratio' | 'avgRatio' | 'delta' | 'percent';
 type SortDirection = 'asc' | 'desc';
 type RatioMode = 'buy-sell' | 'sell-buy';
-const HISTORY_WINDOW_MS = 60 * 60 * 1_000;
 
-interface RatioHistoryHit {
-  eventId: string;
-  receivedAt: string;
-  title: string;
-  feedKey: string;
-  rank: number | null;
-  coin: string;
-  exchange: string | null;
-  buyUsd: number | null;
-  sellUsd: number | null;
-  deltaUsd: number | null;
-  buySellRatio: number | null;
-  displayRatio: number;
-  percent: number | null;
-  volume24hUsd: number | null;
-  rawLine: string;
-}
-
-interface RatioAverage {
-  average: number;
-  count: number;
-}
-
-interface RatioChartPoint {
-  x: number;
-  y: number;
-  time: number;
-  ratio: number;
-  signedRatio: number;
-  label: string;
-  side: 'bull' | 'bear';
-}
-
-interface RatioChartRollingPoint {
-  x: number;
-  y: number;
-  time: number;
-  ratio: number;
-}
-
-interface RatioChartData {
-  points: RatioChartPoint[];
-  rollingPoints: RatioChartRollingPoint[];
-  startLabel: string;
-  endLabel: string;
-  maxRatioLabel: string;
-  midRatioLabel: string;
-  positiveMidY: number;
-  negativeMidY: number;
-}
-
-export function TopTable({ title, subtitle, event, historyEvents = [], comparisonHistoryEvents = [], market, exchangeAvailability, classificationFilter, performanceTrends, hoveredCoin = null, onCoinHover, highlighted, compact = false }: TopTableProps) {
+export function TopTable({ title, subtitle, event, historyEvents = [], comparisonHistoryEvents = [], market, exchangeAvailability, classificationFilter, performanceTrends, hoveredCoin = null, onCoinHover, highlighted, compact = false, maxRows = 10, historyWindowStart, historyWindowEnd }: TopTableProps) {
   const [sort, setSort] = useState<{ key: TopTableSortKey; direction: SortDirection }>({ key: 'ratio', direction: 'desc' });
   const rawEntries = event?.entries ?? [];
   const visibleEntries = rawEntries.filter((entry) => matchesCoinClassificationFilter(entry.coin, classificationFilter));
@@ -94,6 +47,7 @@ export function TopTable({ title, subtitle, event, historyEvents = [], compariso
   const ratioAverages = buildRatioAverages(ratioHistories);
   const [selectedCoin, setSelectedCoin] = useState<string | null>(null);
   const entries = [...visibleEntries].sort((left, right) => compareTopEntries(left, right, sort.key, sort.direction, ratioMode, hitCounts, ratioAverages));
+  const renderedEntries = maxRows === null ? entries : entries.slice(0, maxRows);
   const ratioLabel = isSellTable ? 'S/B' : 'B/S';
   const comparisonRatioLabel = isSellTable ? 'B/S' : 'S/B';
   const selectedHistory = selectedCoin ? ratioHistories.get(selectedCoin) ?? [] : [];
@@ -154,7 +108,7 @@ export function TopTable({ title, subtitle, event, historyEvents = [], compariso
               </tr>
             </thead>
             <tbody>
-              {entries.slice(0, 10).map((entry, index) => {
+              {renderedEntries.map((entry, index) => {
                 const classificationClasses = getCoinClassificationClasses(entry.coin);
                 const isLinked = Boolean(entry.coin && entry.coin === hoveredCoin);
                 const exchangeChips = getCoinExchangeChips(entry.coin, market, exchangeAvailability);
@@ -213,9 +167,18 @@ export function TopTable({ title, subtitle, event, historyEvents = [], compariso
       ) : (
         <div className="empty-state">Waiting for first matching event</div>
       )}
-      {selectedCoin ? (
-        <BsHistoryModal coin={selectedCoin} hits={selectedHistory} comparisonHits={selectedComparisonHistory} ratioLabel={ratioLabel} comparisonRatioLabel={comparisonRatioLabel} onClose={() => setSelectedCoin(null)} />
-      ) : null}
+      {selectedCoin ? createPortal(
+        <BsHistoryModal
+          coin={selectedCoin}
+          hits={selectedHistory}
+          comparisonHits={selectedComparisonHistory}
+          ratioLabel={ratioLabel}
+          comparisonRatioLabel={comparisonRatioLabel}
+          historyWindowStart={historyWindowStart}
+          historyWindowEnd={historyWindowEnd}
+          onClose={() => setSelectedCoin(null)}
+        />
+      , document.body) : null}
     </section>
   );
 }
@@ -239,10 +202,6 @@ function formatRatio(value: number | null | undefined, mode: 'buy-sell' | 'sell-
   const finiteValue = value as number;
   const ratio = mode === 'sell-buy' ? 1 / finiteValue : finiteValue;
   return `${ratio.toFixed(2)}x`;
-}
-
-function formatAverageRatio(value: RatioAverage | null): string {
-  return value ? `${value.average.toFixed(2)}x` : '-';
 }
 
 function formatAverageTitle(value: RatioAverage | null, ratioLabel: string): string {
@@ -356,23 +315,13 @@ function buildRatioHistoriesLastHour(events: NormalizedEvent[], referenceEvent: 
   return histories;
 }
 
-function buildRatioAverages(histories: Map<string, RatioHistoryHit[]>): Map<string, RatioAverage> {
-  const averages = new Map<string, RatioAverage>();
-  for (const [coin, hits] of histories) {
-    const latest = hits.slice(0, 3).map((hit) => hit.displayRatio).filter(Number.isFinite);
-    if (!latest.length) continue;
-    averages.set(coin, { average: latest.reduce((sum, value) => sum + value, 0) / latest.length, count: latest.length });
-  }
-  return averages;
-}
-
 function parseTime(value: string | null | undefined): number | null {
   if (!value) return null;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function BsHistoryModal({ coin, hits, comparisonHits, ratioLabel, comparisonRatioLabel, onClose }: { coin: string; hits: RatioHistoryHit[]; comparisonHits: RatioHistoryHit[]; ratioLabel: string; comparisonRatioLabel: string; onClose: () => void }) {
+function BsHistoryModal({ coin, hits, comparisonHits, ratioLabel, comparisonRatioLabel, historyWindowStart, historyWindowEnd, onClose }: { coin: string; hits: RatioHistoryHit[]; comparisonHits: RatioHistoryHit[]; ratioLabel: string; comparisonRatioLabel: string; historyWindowStart?: string | Date | undefined; historyWindowEnd?: string | Date | undefined; onClose: () => void }) {
   const latestAverage = buildRatioAverages(new Map([[coin, hits]])).get(coin) ?? null;
   const [view, setView] = useState<'graph' | 'details'>('graph');
   return (
@@ -402,7 +351,15 @@ function BsHistoryModal({ coin, hits, comparisonHits, ratioLabel, comparisonRati
           {hits.length ? (
             <div className={`bs-history-content ${view}`}>
               {view === 'graph' ? (
-                <BsHistoryChart coin={coin} hits={hits} comparisonHits={comparisonHits} ratioLabel={ratioLabel} comparisonRatioLabel={comparisonRatioLabel} />
+                <BsHistoryChart
+                  coin={coin}
+                  hits={hits}
+                  comparisonHits={comparisonHits}
+                  ratioLabel={ratioLabel}
+                  comparisonRatioLabel={comparisonRatioLabel}
+                  windowStart={historyWindowStart}
+                  windowEnd={historyWindowEnd}
+                />
               ) : (
                 <BsHistoryDetailsTable hits={hits} ratioLabel={ratioLabel} />
               )}
@@ -412,235 +369,4 @@ function BsHistoryModal({ coin, hits, comparisonHits, ratioLabel, comparisonRati
       </div>
     </div>
   );
-}
-
-function BsHistoryDetailsTable({ hits, ratioLabel }: { hits: RatioHistoryHit[]; ratioLabel: string }) {
-  return (
-    <div className="bs-history-table-panel">
-      <div className="bs-history-table-title">
-        <h3>Hits by time</h3>
-        <span>Newest first</span>
-      </div>
-      <div className="bs-history-table-wrap">
-        <table className="w-full text-left text-xs">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Buy</th>
-              <th>Sell</th>
-              <th>{ratioLabel}</th>
-              <th>Vol24</th>
-            </tr>
-          </thead>
-          <tbody>
-            {hits.map((hit, index) => (
-              <tr className={index < 3 ? 'latest-three' : ''} key={`${hit.eventId}-${hit.rawLine}-${index}`}>
-                <td>{formatExactDateTime(hit.receivedAt)}</td>
-                <td>{formatOptionalMoney(hit.buyUsd)}</td>
-                <td>{formatOptionalMoney(hit.sellUsd)}</td>
-                <td className="bs-history-ratio">{hit.displayRatio.toFixed(2)}x</td>
-                <td>{formatOptionalMoney(hit.volume24hUsd)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function BsHistoryChart({ coin, hits, comparisonHits, ratioLabel, comparisonRatioLabel }: { coin: string; hits: RatioHistoryHit[]; comparisonHits: RatioHistoryHit[]; ratioLabel: string; comparisonRatioLabel: string }) {
-  const chart = buildRatioChart(hits, comparisonHits, ratioLabel, comparisonRatioLabel);
-  const [activePoint, setActivePoint] = useState<RatioChartPoint | null>(null);
-  const barWidth = getChartBarWidth(chart.points);
-  const latest = hits[0]?.displayRatio ?? null;
-  const tooltipPosition = activePoint ? getChartTooltipPosition(activePoint) : null;
-
-  const showNearestPoint = (event: ReactMouseEvent<SVGRectElement>) => {
-    if (!chart.points.length) return;
-    const fallbackPoint = chart.points[chart.points.length - 1];
-    if (!fallbackPoint) return;
-    const svgBounds = event.currentTarget.ownerSVGElement?.getBoundingClientRect();
-    const x = svgBounds && svgBounds.width > 0
-      ? ((event.clientX - svgBounds.left) / svgBounds.width) * 640
-      : fallbackPoint.x;
-    const closestPoint = getClosestChartPoint(chart.points, Math.max(56, Math.min(608, x)));
-    if (closestPoint) setActivePoint(closestPoint);
-  };
-
-  return (
-    <div className="bs-history-chart-card">
-      <div className="bs-history-chart-head">
-        <div>
-          <h3>{ratioLabel} and {comparisonRatioLabel} trend</h3>
-        </div>
-        <strong>{latest === null ? '-' : `${latest.toFixed(2)}x`}</strong>
-      </div>
-      <div className="bs-history-chart-legend" aria-hidden="true">
-        <span><i className="bull" />B/S positive</span>
-        <span><i className="bear" />S/B negative</span>
-        <span><i className="rolling" />Rolling 3 avg</span>
-      </div>
-      <svg className="bs-history-chart" viewBox="0 0 640 220" preserveAspectRatio="none" role="img" aria-label={`${coin} ${ratioLabel} and ${comparisonRatioLabel} ratio history bar chart from -${chart.maxRatioLabel} to ${chart.maxRatioLabel}`}>
-        <line className="bs-history-chart-grid" x1="56" y1="24" x2="608" y2="24" />
-        <line className="bs-history-chart-grid" x1="56" y1={chart.positiveMidY} x2="608" y2={chart.positiveMidY} />
-        <line className="bs-history-chart-grid" x1="56" y1="96" x2="608" y2="96" />
-        <line className="bs-history-chart-grid" x1="56" y1={chart.negativeMidY} x2="608" y2={chart.negativeMidY} />
-        <line className="bs-history-chart-grid" x1="56" y1="168" x2="608" y2="168" />
-        <line className="bs-history-chart-axis" x1="56" y1="24" x2="56" y2="168" />
-        <line className="bs-history-chart-axis" x1="56" y1="168" x2="608" y2="168" />
-        <line className="bs-history-chart-zero" x1="56" y1="96" x2="608" y2="96" />
-        <text className="bs-history-chart-label" x="46" y="28" textAnchor="end">{chart.maxRatioLabel}</text>
-        <text className="bs-history-chart-label" x="46" y={chart.positiveMidY + 4} textAnchor="end">{chart.midRatioLabel}</text>
-        <text className="bs-history-chart-label" x="46" y="100" textAnchor="end">0</text>
-        <text className="bs-history-chart-label" x="46" y={chart.negativeMidY + 4} textAnchor="end">-{chart.midRatioLabel}</text>
-        <text className="bs-history-chart-label" x="46" y="172" textAnchor="end">-{chart.maxRatioLabel}</text>
-        <text className="bs-history-chart-label bs-history-chart-time" x="56" y="198">{chart.startLabel}</text>
-        <text className="bs-history-chart-label bs-history-chart-time" x="608" y="198" textAnchor="end">{chart.endLabel}</text>
-        <text className="bs-history-chart-label" x="332" y="214" textAnchor="middle">Time</text>
-        <text className="bs-history-chart-label" x="16" y="96" textAnchor="middle" transform="rotate(-90 16 96)">B/S positive, S/B negative</text>
-        <rect className="bs-history-chart-hit-area" x="56" y="24" width="552" height="144" onMouseMove={showNearestPoint} onMouseLeave={() => setActivePoint(null)} />
-        {chart.rollingPoints.length > 1 ? (
-          <polyline className="bs-history-chart-rolling-line" points={chart.rollingPoints.map((point) => `${point.x},${point.y}`).join(' ')} />
-        ) : null}
-        {chart.points.map((point, index) => (
-          <rect
-            aria-label={`${formatAxisTime(point.time)} ${point.label} ${point.signedRatio.toFixed(2)}x`}
-            className={`bs-history-chart-bar ${point.side} ${activePoint?.time === point.time && activePoint.label === point.label ? 'active' : ''}`}
-            height={Math.abs(96 - point.y)}
-            key={`${point.time}-${index}`}
-            onBlur={() => setActivePoint(null)}
-            onFocus={() => setActivePoint(point)}
-            onMouseEnter={() => setActivePoint(point)}
-            rx="5"
-            tabIndex={0}
-            width={barWidth}
-            x={point.x - barWidth / 2}
-            y={Math.min(point.y, 96)}
-          >
-            <title>{`${formatAxisTime(point.time)}: ${point.label} ${point.signedRatio.toFixed(2)}x`}</title>
-          </rect>
-        ))}
-        {activePoint && tooltipPosition ? (
-          <g className="bs-history-chart-hover">
-            <line className="bs-history-chart-cursor" x1={activePoint.x} y1="24" x2={activePoint.x} y2="168" />
-            <rect className={`bs-history-chart-hover-bar ${activePoint.side}`} x={activePoint.x - barWidth / 2} y={Math.min(activePoint.y, 96)} width={barWidth} height={Math.abs(96 - activePoint.y)} rx="5" />
-            <g transform={`translate(${tooltipPosition.x} ${tooltipPosition.y})`}>
-              <rect className="bs-history-chart-tooltip-bg" width="132" height="48" rx="10" />
-              <text className="bs-history-chart-tooltip-time" x="12" y="18">{formatAxisTime(activePoint.time)}</text>
-              <text className="bs-history-chart-tooltip-ratio" x="12" y="36">{activePoint.label} {activePoint.signedRatio.toFixed(2)}x</text>
-            </g>
-          </g>
-        ) : null}
-      </svg>
-    </div>
-  );
-}
-
-function buildRatioChart(hits: RatioHistoryHit[], comparisonHits: RatioHistoryHit[], ratioLabel: string, comparisonRatioLabel: string): RatioChartData {
-  const primarySign = ratioLabel === 'S/B' ? -1 : 1;
-  const comparisonSign = primarySign * -1;
-  const primaryPoints = hits.map((hit) => ({ time: parseTime(hit.receivedAt), ratio: hit.displayRatio, signedRatio: primarySign * hit.displayRatio, label: ratioLabel, side: primarySign > 0 ? 'bull' as const : 'bear' as const }));
-  const ordered = [
-    ...primaryPoints,
-    ...comparisonHits.map((hit) => ({ time: parseTime(hit.receivedAt), ratio: hit.displayRatio, signedRatio: comparisonSign * hit.displayRatio, label: comparisonRatioLabel, side: comparisonSign > 0 ? 'bull' as const : 'bear' as const }))
-  ]
-    .filter((point): point is { time: number; ratio: number; signedRatio: number; label: string; side: 'bull' | 'bear' } => point.time !== null && Number.isFinite(point.ratio))
-    .sort((left, right) => left.time - right.time);
-  const maxTime = ordered.at(-1)?.time ?? Date.now();
-  const minTime = maxTime - HISTORY_WINDOW_MS;
-  const timeRange = HISTORY_WINDOW_MS;
-  const maxRatio = Math.max(3, ...ordered.map((point) => point.ratio));
-  const ratioScaleMax = maxRatio > 3 ? Math.ceil(maxRatio) : 3;
-  const points = ordered.map((point) => {
-    const x = ordered.length === 1 ? 608 : 56 + ((point.time - minTime) / timeRange) * 552;
-    const ratio = Math.max(0, Math.min(ratioScaleMax, point.ratio));
-    const y = 96 - ((point.signedRatio < 0 ? -ratio : ratio) / ratioScaleMax) * 72;
-    return { x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, time: point.time, ratio: point.ratio, signedRatio: point.signedRatio, label: point.label, side: point.side };
-  });
-  const rollingPoints = buildRollingPoints(primaryPoints, minTime, timeRange, ratioScaleMax);
-
-  return {
-    points,
-    rollingPoints,
-    startLabel: formatAxisTime(minTime),
-    endLabel: formatAxisTime(maxTime),
-    maxRatioLabel: formatRatioAxisTick(ratioScaleMax),
-    midRatioLabel: '1.5',
-    positiveMidY: ratioAxisY(1.5, ratioScaleMax),
-    negativeMidY: ratioAxisY(-1.5, ratioScaleMax)
-  };
-}
-
-function buildRollingPoints(
-  points: Array<{ time: number | null; ratio: number; signedRatio: number }>,
-  minTime: number,
-  timeRange: number,
-  ratioScaleMax: number
-): RatioChartRollingPoint[] {
-  return points
-    .filter((point): point is { time: number; ratio: number; signedRatio: number } => point.time !== null && Number.isFinite(point.ratio))
-    .sort((left, right) => left.time - right.time)
-    .map((point, index, orderedPoints) => {
-      const window = orderedPoints.slice(Math.max(0, index - 2), index + 1);
-      const average = window.reduce((sum, item) => sum + item.signedRatio, 0) / window.length;
-      const x = orderedPoints.length === 1 ? 608 : 56 + ((point.time - minTime) / timeRange) * 552;
-      const clampedAverage = Math.max(-ratioScaleMax, Math.min(ratioScaleMax, average));
-      const y = 96 - (clampedAverage / ratioScaleMax) * 72;
-      return { x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, time: point.time, ratio: Math.abs(average) };
-    });
-}
-
-function ratioAxisY(value: number, scaleMax: number): number {
-  return Math.round((96 - (value / scaleMax) * 72) * 10) / 10;
-}
-
-function getChartBarWidth(points: RatioChartPoint[]): number {
-  if (points.length <= 1) return 42;
-  const minGap = points.slice(1).reduce((smallestGap, point, index) => {
-    const previousPoint = points[index];
-    if (!previousPoint) return smallestGap;
-    return Math.min(smallestGap, Math.abs(point.x - previousPoint.x));
-  }, Number.POSITIVE_INFINITY);
-  return Math.max(8, Math.min(42, minGap * 0.58));
-}
-
-function getClosestChartPoint(points: RatioChartPoint[], x: number): RatioChartPoint | null {
-  const firstPoint = points[0];
-  if (!firstPoint) return null;
-  return points.slice(1).reduce((closest, point) => (Math.abs(point.x - x) < Math.abs(closest.x - x) ? point : closest), firstPoint);
-}
-
-function getChartTooltipPosition(point: RatioChartPoint): { x: number; y: number } {
-  const width = 132;
-  const height = 48;
-  const x = Math.min(608 - width, Math.max(56, point.x - width / 2));
-  const preferredY = point.y < 82 ? point.y + 14 : point.y - height - 14;
-  const y = Math.min(168 - height, Math.max(24, preferredY));
-  return { x: Math.round(x), y: Math.round(y) };
-}
-
-function formatRatioAxisTick(value: number): string {
-  return Number.isInteger(value) ? value.toString() : value.toFixed(1);
-}
-
-function formatAxisTime(value: number): string {
-  return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(new Date(value));
-}
-
-function formatExactDateTime(value: string): string {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return 'Unknown';
-  return new Intl.DateTimeFormat(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  }).format(parsed);
-}
-
-function copyText(value: string): void {
-  void navigator.clipboard?.writeText(value);
 }

@@ -32,7 +32,11 @@ describe('ScoreRepository', () => {
       'commit'
     ]);
     expect(client.findQuery('insert into score_evidence')?.sql).toContain('on conflict (evidence_key) do update');
-    expect(client.findQuery('insert into coin_score_current')?.sql).toContain('where excluded.latest_score_ts >= coin_score_current.latest_score_ts');
+    const currentQuery = client.findQuery('insert into coin_score_current');
+    expect(currentQuery?.sql).toContain('snapshot_payload');
+    expect(currentQuery?.sql).toContain('snapshot_payload = excluded.snapshot_payload');
+    expect(currentQuery?.sql).toContain('where excluded.latest_score_ts >= coin_score_current.latest_score_ts');
+    expect(currentQuery?.values).toContainEqual({ test: true });
   });
 
   it('scopes current score summaries and filters to the latest score timestamp', async () => {
@@ -68,6 +72,50 @@ describe('ScoreRepository', () => {
     expect(pool.queries[2]?.sql).not.toContain('c.net_score > 0');
     expect(pool.queries[2]?.sql).not.toContain('c.net_score < 0');
   });
+
+  it('surfaces flow-v2 state, action, and component breakdown from current score payloads', async () => {
+    const pool = new FakeReadPool([
+      {
+        score_config_version: 'flow-v2',
+        window_minutes: 15,
+        coin: 'HYPE',
+        latest_score_ts: '2026-01-01T00:15:00.000Z',
+        bull_score: 37.71,
+        bear_score: 0,
+        net_score: 37.71,
+        confidence_score: 80,
+        rank: 1,
+        updated_at: '2026-01-01T00:15:01.000Z',
+        dominant_signal: 'flow_spot_buy',
+        market_regime: 'bullish',
+        primary_reason: 'Spot buy pressure',
+        risk_tags: [],
+        evidence_total: 1,
+        top_rule_keys: ['flow_spot_buy'],
+        feed_keys: ['flow_spot'],
+        sides: ['bull'],
+        recent_score_delta: 10,
+        snapshot_payload: {
+          scoreState: 'clean_bull',
+          tradeAction: 'WATCH',
+          componentScores: { spot: { bull: 32.05, bear: 0 } },
+          flowBreakdown: [{ family: 'spot', side: 'bull', score: 32.05 }]
+        }
+      }
+    ]);
+    const repository = new ScoreRepository(pool);
+
+    const scores = await repository.getCurrentScores({ scoreConfigVersion: 'flow-v2', windowMinutes: 15, limit: 10, side: 'bull' });
+
+    expect(pool.queries[0]?.sql).toContain('c.snapshot_payload');
+    expect(pool.queries[0]?.sql).not.toContain('delta.snapshot_payload');
+    expect(scores[0]).toMatchObject({
+      scoreState: 'clean_bull',
+      tradeAction: 'WATCH',
+      componentScores: { spot: { bull: 32.05, bear: 0 } },
+      flowBreakdown: [{ family: 'spot', side: 'bull', score: 32.05 }]
+    });
+  });
 });
 
 interface CapturedQuery {
@@ -98,13 +146,15 @@ class FakeClient {
 class FakeReadPool {
   readonly queries: CapturedQuery[] = [];
 
+  constructor(private readonly rows: QueryResultRow[] = []) {}
+
   async connect() {
     return new FakeClient().asPoolClient();
   }
 
   async query<T extends QueryResultRow = QueryResultRow>(sql: string, values: unknown[] = []): Promise<QueryResult<T>> {
     this.queries.push({ sql, values });
-    return { rows: [] as T[] } as QueryResult<T>;
+    return { rows: this.rows as T[] } as QueryResult<T>;
   }
 }
 

@@ -18,6 +18,8 @@ interface MockStreamHandlers {
 const apiMocks = vi.hoisted(() => ({
   fetchDashboardSnapshot: vi.fn(),
   fetchDashboardStatus: vi.fn(),
+  clearEventData: vi.fn(),
+  resetAllStoredData: vi.fn(),
   fetchExchangeSymbols: vi.fn(),
   fetchScoresTop: vi.fn(),
   fetchScoresCurrent: vi.fn(),
@@ -26,6 +28,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchScoreTimeline: vi.fn(),
   fetchScoreEvidence: vi.fn(),
   fetchScoringConfigCurrent: vi.fn(),
+  fetchTopSpotHistory: vi.fn(),
   getEnvDashboardAuthToken: vi.fn(),
   closeStream: vi.fn(),
   streamHandlers: null as null | MockStreamHandlers
@@ -39,6 +42,8 @@ vi.mock('./api/sse', () => ({
   },
   fetchDashboardSnapshot: apiMocks.fetchDashboardSnapshot,
   fetchDashboardStatus: apiMocks.fetchDashboardStatus,
+  clearEventData: apiMocks.clearEventData,
+  resetAllStoredData: apiMocks.resetAllStoredData,
   fetchExchangeSymbols: apiMocks.fetchExchangeSymbols,
   fetchScoresTop: apiMocks.fetchScoresTop,
   fetchScoresCurrent: apiMocks.fetchScoresCurrent,
@@ -47,6 +52,7 @@ vi.mock('./api/sse', () => ({
   fetchScoreTimeline: apiMocks.fetchScoreTimeline,
   fetchScoreEvidence: apiMocks.fetchScoreEvidence,
   fetchScoringConfigCurrent: apiMocks.fetchScoringConfigCurrent,
+  fetchTopSpotHistory: apiMocks.fetchTopSpotHistory,
   getEnvDashboardAuthToken: apiMocks.getEnvDashboardAuthToken
 }));
 

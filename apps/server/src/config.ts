@@ -75,7 +75,7 @@ const EnvSchema = z.object({
   PRICE_COLLECTION_ACTIVE_COIN_TTL_MS: integerFromEnv.default(86_400_000),
   FORWARD_RETURN_HORIZONS_MINUTES: integerListFromEnv.default([5, 15, 60, 240, 1_440]),
   SCORES_ENABLED: booleanFromEnv.default(false),
-  SCORES_VERSION: z.string().trim().min(1).default('rule-v1'),
+  SCORES_VERSION: z.string().trim().min(1).default('flow-v2'),
   SCORES_RECALC_INTERVAL_MS: integerFromEnv.default(30_000),
   SCORES_RECOMPUTE_DEBOUNCE_MS: integerFromEnv.default(1_000),
   SCORES_WINDOWS_MINUTES: integerListFromEnv.default([5, 15, 60, 240, 1_440]),

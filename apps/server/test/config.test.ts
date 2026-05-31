@@ -35,7 +35,7 @@ describe('loadConfig database settings', () => {
     });
     expect(config.scores).toEqual({
       enabled: false,
-      version: 'rule-v1',
+      version: 'flow-v2',
       recalculationIntervalMs: 30_000,
       recomputeDebounceMs: 1_000,
       windowsMinutes: [5, 15, 60, 240, 1_440],

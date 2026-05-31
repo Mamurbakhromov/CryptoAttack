@@ -19,7 +19,7 @@ describe('backtest API routes', () => {
 
     expect(response.statusCode).toBe(200);
     expect(service.getSummary).toHaveBeenCalledWith(expect.objectContaining({
-      scoreConfigVersion: 'rule-v1',
+      scoreConfigVersion: 'flow-v2',
       compareScoreConfigVersion: 'rule-v2',
       windowMinutes: 15,
       horizonsMinutes: [5, 15],
