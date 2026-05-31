@@ -6,17 +6,15 @@ import { describe, expect, it } from 'vitest';
 import { StorageHealthService } from '../src/db/storageHealth.js';
 
 describe('StorageHealthService', () => {
-  it('maps database, migration, latest price, backlog, and table size health', async () => {
+  it('maps database, migration, and table size health', async () => {
     const pool = new FakeHealthPool();
     const service = new StorageHealthService(pool, fileURLToPath(new URL('../migrations', import.meta.url)));
 
     const health = await service.getHealth();
 
     expect(health.connected).toBe(true);
-    expect(health.migration.version).toBe('000008');
+    expect(health.migration.version).toBe('000009');
     expect(health.migration.pending).toBe(0);
-    expect(health.latestPriceTick).toMatchObject({ symbol: 'BTCUSDT', coin: 'BTC' });
-    expect(health.forwardReturnBacklog).toMatchObject({ pending: 3, due: 2, missingPrice: 1, failed: 1 });
     expect(health.tableSizes.raw_events).toEqual({ estimatedRows: 42, totalBytes: 4096 });
   });
 });
@@ -34,14 +32,9 @@ class FakeHealthPool {
         { version: '000005', filename: '000005_backtest_analytics_indexes.sql', checksum: null, applied_at: new Date('2026-01-01T00:00:00.000Z') },
         { version: '000006', filename: '000006_timescale_compression_settings.sql', checksum: null, applied_at: new Date('2026-01-01T00:00:00.000Z') },
         { version: '000007', filename: '000007_forward_return_identity.sql', checksum: null, applied_at: new Date('2026-01-01T00:00:00.000Z') },
-        { version: '000008', filename: '000008_current_score_payload.sql', checksum: null, applied_at: new Date('2026-01-01T00:00:00.000Z') }
+        { version: '000008', filename: '000008_current_score_payload.sql', checksum: null, applied_at: new Date('2026-01-01T00:00:00.000Z') },
+        { version: '000009', filename: '000009_remove_scoring_storage.sql', checksum: null, applied_at: new Date('2026-01-01T00:00:00.000Z') }
       ] as unknown as T[] } as QueryResult<T>;
-    }
-    if (sql.includes('from price_ticks')) {
-      return { rows: [{ ts: new Date('2026-01-01T00:00:00.000Z'), collected_at: new Date('2026-01-01T00:00:01.000Z'), source: 'binance', exchange: 'binance', market: 'spot', symbol: 'BTCUSDT', coin: 'BTC' }] as unknown as T[] } as QueryResult<T>;
-    }
-    if (sql.includes('from forward_returns')) {
-      return { rows: [{ pending: 3, due: 2, missing_price: 1, failed: 1, oldest_due_target_ts: new Date('2026-01-01T00:05:00.000Z') }] as unknown as T[] } as QueryResult<T>;
     }
     if (sql.includes('from pg_class')) {
       return { rows: [{ relname: 'raw_events', estimated_rows: 42, total_bytes: 4096 }] as unknown as T[] } as QueryResult<T>;

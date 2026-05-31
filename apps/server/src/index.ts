@@ -6,17 +6,13 @@ import fastifyStatic from '@fastify/static';
 import { config as loadDotenv } from 'dotenv';
 import Fastify from 'fastify';
 
-import { BacktestService } from './backtest/backtestService.js';
 import { loadConfig, type AppConfig } from './config.js';
 import { CryptoAttackClient } from './cryptoattack/client.js';
-import { BacktestRepository } from './db/backtestRepository.js';
 import { disabledDurableIngestionStatus, DurableIngestionQueue, durableIngestionOptionsFromConfig } from './db/durableIngestion.js';
 import { EventIngestionRepository, EventMaintenanceRepository } from './db/eventRepository.js';
-import { MarketDataRepository } from './db/marketDataRepository.js';
 import { runMigrations } from './db/migrations.js';
 import { resolveDefaultMigrationsDir } from './db/paths.js';
 import { closePostgresPool, createPostgresPool, verifyPostgresConnection } from './db/postgres.js';
-import { ScoreRepository } from './db/scoreRepository.js';
 import { StorageHealthService } from './db/storageHealth.js';
 import { applyTimescalePolicies } from './db/timescalePolicies.js';
 import { TopSpotHistoryRepository } from './db/topSpotHistoryRepository.js';
@@ -28,11 +24,7 @@ import { replayLatestRawEventsFromLog } from './events/replayRawLog.js';
 import type { NormalizedEvent } from './events/types.js';
 import { registerHttpRoutes } from './http/routes.js';
 import { SseHub } from './http/sse.js';
-import { ForwardReturnWorker } from './market/forwardReturnWorker.js';
-import { PriceCollectionService } from './market/priceCollectionService.js';
-import { disabledWorkerStatus } from './market/workerStatus.js';
 import { buildStartupWarnings } from './ops/startupWarnings.js';
-import { disabledScoreWorkerStatus, ScoreWorker, scoreWorkerOptionsFromConfig } from './scoring/scoreWorker.js';
 import { startMockCryptoAttack, type RawEventAppender } from './mock/mockCryptoAttack.js';
 import { createLogger, type AppLogger } from './utils/logger.js';
 
@@ -93,11 +85,7 @@ const store = new EventStore({
   authEnabled: config.dashboardAuthEnabled
 });
 const appendRawEvent = createRawEventAppender(config, logger);
-const scoreRepository = postgresPool ? new ScoreRepository(postgresPool) : null;
 const eventMaintenance = postgresPool ? new EventMaintenanceRepository(postgresPool) : null;
-const backtestRepository = postgresPool ? new BacktestRepository(postgresPool) : null;
-const backtestService = backtestRepository ? new BacktestService(backtestRepository) : null;
-const marketDataRepository = postgresPool ? new MarketDataRepository(postgresPool) : null;
 const topSpotHistoryRepository = postgresPool ? new TopSpotHistoryRepository(postgresPool) : null;
 const storageHealthService = postgresPool ? new StorageHealthService(postgresPool, migrationsDir) : null;
 const symbolCache = new ExchangeSymbolCache({
@@ -112,74 +100,22 @@ const spotPerformance = new SpotPerformanceService({
   timeoutMs: config.exchangeSymbolRefreshTimeoutMs,
   logger
 });
-const priceCollectionService = marketDataRepository
-  ? new PriceCollectionService(marketDataRepository, symbolCache, {
-      enabled: config.priceCollection.enabled,
-      intervalMs: config.priceCollection.intervalMs,
-      activeCoinTtlMs: config.priceCollection.activeCoinTtlMs,
-      timeoutMs: config.exchangeSymbolRefreshTimeoutMs,
-      logger
-    })
-  : null;
-const forwardReturnWorker = marketDataRepository
-  ? new ForwardReturnWorker(marketDataRepository, {
-      enabled: config.priceCollection.enabled,
-      intervalMs: config.priceCollection.intervalMs,
-      horizonsMinutes: config.priceCollection.forwardReturnHorizonsMinutes,
-      logger
-    })
-  : null;
-let scoreWorker: ScoreWorker | null = null;
 let durableIngestion: DurableIngestionQueue | null = null;
-const getWorkerStatus = () => ({
-  priceCollection: priceCollectionService?.getStatus() ?? disabledWorkerStatus(config.priceCollection.intervalMs),
-  forwardReturns: forwardReturnWorker?.getStatus() ?? disabledWorkerStatus(config.priceCollection.intervalMs),
-  scores: scoreWorker?.getStatus() ?? disabledScoreWorkerStatus(config)
-});
 const getStorageStatusPayload = () => ({
   generatedAt: new Date().toISOString(),
-  storage: durableIngestion?.getStatus() ?? disabledDurableIngestionStatus(),
-  workers: getWorkerStatus()
+  storage: durableIngestion?.getStatus() ?? disabledDurableIngestionStatus()
 });
 const sseHub = new SseHub(
   store,
   {
     corsOrigin: config.webOrigin,
-    getScoreSnapshot: () => {
-      const status = scoreWorker?.getStatus() ?? disabledScoreWorkerStatus(config);
-      return {
-        generatedAt: new Date().toISOString(),
-        scoreVersion: status.scoreVersion,
-        asOf: status.latestScoreTs,
-        windowsMinutes: status.windowsMinutes,
-        scores: [],
-        health: status
-      };
-    },
     getStorageStatus: getStorageStatusPayload
   },
   spotPerformance
 );
-scoreWorker = scoreRepository
-  ? new ScoreWorker(scoreRepository, {
-      ...scoreWorkerOptionsFromConfig(config, logger),
-      onUpdate: (event) => {
-        sseHub.broadcastScoreUpdate(event);
-        sseHub.broadcastScoreSnapshot({
-          generatedAt: event.generatedAt,
-          scoreVersion: event.scoreVersion,
-          asOf: event.asOf,
-          windowsMinutes: config.scores.windowsMinutes,
-          scores: event.scores,
-          health: scoreWorker?.getStatus() ?? disabledScoreWorkerStatus(config)
-        });
-      }
-    })
-  : null;
 durableIngestion = postgresPool
   ? new DurableIngestionQueue(new EventIngestionRepository(postgresPool), logger, {
       ...durableIngestionOptionsFromConfig(config),
-      onWritten: (job) => scoreWorker?.enqueueEvents(job.normalizedEvents, 'ingestion'),
       onStatus: () => sseHub.broadcastStorageStatus(getStorageStatusPayload())
     })
   : null;
@@ -188,9 +124,6 @@ const app = Fastify({ logger: false });
 await symbolCache.loadFromDisk();
 symbolCache.start();
 spotPerformance.start();
-priceCollectionService?.start();
-forwardReturnWorker?.start();
-scoreWorker?.start();
 
 if (config.replayRawEventsOnStart) {
   const replayResult = await replayLatestRawEventsFromLog({
@@ -213,15 +146,8 @@ await registerHttpRoutes(app, {
   symbolCache,
   spotPerformance,
   eventMaintenance,
-  scoreRepository,
-  backtestService,
   topSpotHistoryRepository,
-  resetRuntimeState: () => ({
-    clearedPendingScoreCoins: scoreWorker?.resetRuntimeState().clearedPendingCoins ?? 0,
-    clearedActivePriceCoins: priceCollectionService?.resetRuntimeState().clearedActiveCoins ?? 0
-  }),
   getStorageStatus: () => durableIngestion?.getStatus() ?? disabledDurableIngestionStatus(),
-  getWorkerStatus,
   getDatabaseHealth: () => storageHealthService?.getHealth() ?? null,
   startupWarnings
 });
@@ -342,7 +268,6 @@ function handleRawEvent(raw: unknown, endpointName: string): void {
     receivedAt: events[0]?.receivedAt ?? new Date().toISOString(),
     normalizedEvents: events
   });
-  priceCollectionService?.markActiveCoins(storedEvents);
 }
 
 async function shutdown(signal: string): Promise<void> {
@@ -350,9 +275,6 @@ async function shutdown(signal: string): Promise<void> {
   controller.stop();
   spotPerformance.stop();
   symbolCache.stop();
-  priceCollectionService?.stop();
-  forwardReturnWorker?.stop();
-  scoreWorker?.stop();
   await durableIngestion?.stop(config.database.writeDrainTimeoutMs);
   sseHub.close();
   await closePostgresPool(postgresPool);

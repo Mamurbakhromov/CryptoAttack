@@ -31,11 +31,15 @@ SSE is used because the UI is one-way real-time display. There is no browser-to-
 ## Setup
 
 ```bash
+nvm install
+nvm use
+corepack enable
+corepack prepare pnpm@9.15.4 --activate
 pnpm install
 cp .env.example .env
 ```
 
-Use Node.js 24 or newer.
+Use Node.js 24.x. The repository includes `.nvmrc`, `.node-version`, and `engine-strict=true` so dependency installation fails on unsupported Node versions.
 
 ## Environment Variables
 
@@ -95,27 +99,14 @@ DATABASE_WRITE_RETRY_BASE_MS=250
 DATABASE_WRITE_RETRY_MAX_MS=5000
 DATABASE_WRITE_DRAIN_TIMEOUT_MS=10000
 RAW_EVENTS_RETENTION_DAYS=30
-PRICE_TICKS_RETENTION_DAYS=180
-SCORE_SNAPSHOTS_RETENTION_DAYS=365
 TIMESCALE_COMPRESSION_ENABLED=false
-PRICE_COLLECTION_ENABLED=false
-PRICE_COLLECTION_INTERVAL_MS=60000
-PRICE_COLLECTION_ACTIVE_COIN_TTL_MS=86400000
-FORWARD_RETURN_HORIZONS_MINUTES=5,15,60,240,1440
-SCORES_ENABLED=false
-SCORES_VERSION=flow-v2
-SCORES_RECALC_INTERVAL_MS=30000
-SCORES_RECOMPUTE_DEBOUNCE_MS=1000
-SCORES_WINDOWS_MINUTES=5,15,60,240,1440
-SCORES_BATCH_COINS=100
-SCORES_MAX_QUEUE_DEPTH=10000
 ```
 
-Storage is disabled by default, so tests, mock mode, and live SSE continue to run without Postgres. When `DATABASE_STORAGE_ENABLED=true`, `DATABASE_URL` must be a valid `postgres://` or `postgresql://` URL or the server fails before startup without printing the URL. In production, set `DATABASE_REQUIRED_ON_START=true` so storage and scoring cannot launch with Postgres unavailable.
+Storage is disabled by default, so tests, mock mode, and live SSE continue to run without Postgres. When `DATABASE_STORAGE_ENABLED=true`, `DATABASE_URL` must be a valid `postgres://` or `postgresql://` URL or the server fails before startup without printing the URL. In production, set `DATABASE_REQUIRED_ON_START=true` so the app cannot launch with Postgres unavailable.
 
 The Docker Compose Postgres credentials in `.env.example` are local-only conveniences. Change `POSTGRES_PASSWORD`, `DATABASE_URL`, and all dashboard/API tokens before exposing any service beyond localhost.
 
-Timescale retention policies are applied for `raw_events`, `price_ticks`, and `score_snapshots` when storage is enabled. Compression policies are added only when `TIMESCALE_COMPRESSION_ENABLED=true`; test backup and restore before enabling aggressive retention.
+Timescale retention policies are applied for `raw_events` when storage is enabled. Compression policies are added only when `TIMESCALE_COMPRESSION_ENABLED=true`; test backup and restore before enabling aggressive retention.
 
 ## Storage Setup
 
@@ -125,22 +116,7 @@ Timescale retention policies are applied for `raw_events`, `price_ticks`, and `s
 4. Check `DATABASE_STORAGE_ENABLED=true pnpm --filter @cryptoattack/server db:status`.
 5. Optional: backfill `data/raw-events.ndjson` with `db:backfill`.
 
-Storage is fail-open for the live dashboard after startup: in-memory buffers and SSE continue if async writes fail, and `/api/storage/status` reports queue depth, failed writes, migrations, worker health, and table-size estimates. Rows are durable after Postgres confirms the write; queued in-process write jobs are not durable across a process crash.
-
-## Scoring Setup
-
-Scores require durable storage. Set:
-
-```bash
-DATABASE_STORAGE_ENABLED=true
-PRICE_COLLECTION_ENABLED=true
-SCORES_ENABLED=true
-SCORES_VERSION=flow-v2
-SCORES_WINDOWS_MINUTES=5,15,60,240,1440
-FORWARD_RETURN_HORIZONS_MINUTES=5,15,60,240,1440
-```
-
-`PRICE_COLLECTION_ENABLED=true` lets the forward-return worker label historical outcomes for backtesting. Live scoring defaults to `flow-v2`, an intraday spot-led flow model for 2-4 hour trade pressure. The legacy transparent rule engine remains available with `SCORES_VERSION=rule-v1`.
+Storage is fail-open for the live dashboard after startup: in-memory buffers and SSE continue if async writes fail, and `/api/storage/status` reports queue depth, failed writes, migrations, and table-size estimates. Rows are durable after Postgres confirms the write; queued in-process write jobs are not durable across a process crash.
 
 ## Local TimescaleDB
 
@@ -206,10 +182,9 @@ Health checks:
 
 ```bash
 curl "http://127.0.0.1:3001/api/storage/status"
-curl "http://127.0.0.1:3001/api/workers/status"
 ```
 
-`/api/storage/status` reports DB connectivity, latest migration version, writer queue depth, failed writes, last successful write, last score recompute, latest price tick, forward-return backlog, and cheap table-size estimates.
+`/api/storage/status` reports DB connectivity, latest migration version, writer queue depth, failed writes, last successful write, and cheap table-size estimates.
 
 Safe logical backup with `pg_dump`:
 
@@ -375,9 +350,6 @@ DASHBOARD_ADMIN_TOKEN=replace-with-a-different-long-random-token
 DATABASE_STORAGE_ENABLED=true
 DATABASE_REQUIRED_ON_START=true
 DATABASE_MIGRATIONS_ON_START=false
-PRICE_COLLECTION_ENABLED=true
-SCORES_ENABLED=true
-SCORES_VERSION=flow-v2
 LOG_RAW_EVENTS=true
 RAW_EVENT_LOG_PATH=/var/lib/cryptoattack/data/raw-events.ndjson
 ```
@@ -414,30 +386,9 @@ pm2 stop cryptoattack-dashboard
 - Keep SSE proxy buffering disabled. For Nginx, use `proxy_buffering off` on the `/api/stream` route.
 - Terminate HTTPS at the reverse proxy and forward to the backend on `127.0.0.1:3001`.
 
-## Interpreting Scores
-
-- `bullScore` and `bearScore` are independent 0-100 pressure scores from transparent rule evidence.
-- `netScore` is bull minus bear pressure, from `-100` to `100`.
-- `confidenceScore` reflects evidence count, parser quality, recency, and conflict penalties.
-- Low confidence means thin data. Treat scores below `25` confidence as provisional.
-- Score evidence rows explain each contribution with rule key, feed key, side, contribution, decay, and source timing.
-- Forward returns are not score inputs; they are historical labels for evaluation only.
-
-## Backtesting
-
-Backtesting reads score snapshots and score-time forward-return labels. It is intended for rule evaluation, threshold tuning, and version comparisons, not live trading signals.
-
-```bash
-pnpm backtest -- --horizon-minutes 5,15,60 --window-minutes 15 --side net --min-confidence 50
-```
-
-Use `/api/backtest/summary`, `/api/backtest/score-buckets`, `/api/backtest/rules`, and `/api/backtest/coin/:coin` for API access. See `docs/backtesting-analytics.md` for metric definitions and label-boundary details.
-
 ## Retention
 
 - `RAW_EVENTS_RETENTION_DAYS` controls raw event history.
-- `PRICE_TICKS_RETENTION_DAYS` controls public price tick history for labels.
-- `SCORE_SNAPSHOTS_RETENTION_DAYS` controls historical scores and backtest coverage.
 - Retention policies are applied only when storage is enabled.
 - Compression policies are applied only when `TIMESCALE_COMPRESSION_ENABLED=true`.
 - Back up before lowering retention windows, because deleted chunks are not recoverable from the database itself.
@@ -447,18 +398,6 @@ Use `/api/backtest/summary`, `/api/backtest/score-buckets`, `/api/backtest/rules
 - `GET /health`
 - `GET /api/status`
 - `GET /api/storage/status`
-- `GET /api/workers/status`
-- `GET /api/scores/top?side=bull&limit=25&minConfidence=60`
-- `GET /api/scores/current?side=net&limit=100&updatedSince=2026-01-01T00:00:00.000Z`
-- `GET /api/scores/BTC`
-- `GET /api/scores/BTC/timeline?limit=100&windowMinutes=15`
-- `GET /api/scores/BTC/evidence?side=bull&exchange=binance&market=spot`
-- `GET /api/scores/market-regime?minConfidence=50`
-- `GET /api/scoring/config/current`
-- `GET /api/backtest/summary?side=net&horizonMinutes=5,15,60`
-- `GET /api/backtest/score-buckets?horizonMinutes=60&bucketSize=10`
-- `GET /api/backtest/rules?minSamples=20`
-- `GET /api/backtest/coin/BTC?horizonMinutes=15&limit=50`
 - `GET /api/snapshot`
 - `GET /api/events?feedKey=listings&limit=50`
 - `GET /api/exchange-symbols?exchange=binance&market=spot&search=btc`
@@ -467,41 +406,28 @@ Use `/api/backtest/summary`, `/api/backtest/score-buckets`, `/api/backtest/rules
 - `GET /api/binance/open-interest?coin=BTC&period=5m&limit=12`
 - `GET /api/stream`
 - `DELETE /api/storage/events`
+- `DELETE /api/storage/history/older-than-7-days`
 - `DELETE /api/storage/all-data`
 
 Protected API routes require a dashboard token only when `DASHBOARD_AUTH_ENABLED=true`. `/health` remains public for uptime checks.
-Destructive storage reset routes also require `DASHBOARD_ADMIN_TOKEN` through `x-dashboard-admin-token` or `adminToken`.
+Destructive storage maintenance routes also require `DASHBOARD_ADMIN_TOKEN` through `x-dashboard-admin-token` or `adminToken`. The seven-day cleanup keeps recent data and deletes older durable history rows plus old raw NDJSON log lines.
 
-Score API curl examples:
+API curl examples:
 
 ```bash
-curl "http://127.0.0.1:3001/api/scores/top?side=bull&limit=10&minConfidence=60"
-curl "http://127.0.0.1:3001/api/scores/current?side=net&halal=true&exchange=binance&market=spot"
-curl "http://127.0.0.1:3001/api/scores/BTC/timeline?windowMinutes=15&limit=100"
-curl "http://127.0.0.1:3001/api/scores/BTC/evidence?side=net&limit=25"
-curl "http://127.0.0.1:3001/api/scores/market-regime?minConfidence=50"
-curl "http://127.0.0.1:3001/api/scoring/config/current?includeRules=false"
 curl "http://127.0.0.1:3001/api/storage/status"
-curl "http://127.0.0.1:3001/api/backtest/summary?side=net&horizonMinutes=5,15,60&minConfidence=50"
-curl "http://127.0.0.1:3001/api/backtest/rules?horizonMinutes=15&minSamples=20"
+curl "http://127.0.0.1:3001/api/events?feedKey=listings&limit=50"
+curl "http://127.0.0.1:3001/api/exchange-symbols?exchange=binance&market=spot&search=btc"
 ```
-
-Backtest CLI example:
-
-```bash
-pnpm backtest -- --horizon-minutes 5,15,60 --window-minutes 15 --side net --min-confidence 50
-```
-
-Backtest endpoints and CLI are historical analytics only. They read `score_snapshots`, `score_evidence`, and score-time `forward_returns`; forward-return labels are not used by live scoring. See `docs/backtesting-analytics.md` for metric definitions and interpretation guidance.
 
 With dashboard auth enabled:
 
 ```bash
-curl -H "Authorization: Bearer $DASHBOARD_AUTH_TOKEN" "http://127.0.0.1:3001/api/scores/top?side=bear&limit=10"
+curl -H "Authorization: Bearer $DASHBOARD_AUTH_TOKEN" "http://127.0.0.1:3001/api/storage/status"
 curl -N "http://127.0.0.1:3001/api/stream?token=$DASHBOARD_AUTH_TOKEN"
 ```
 
-The SSE stream keeps the existing `snapshot`, `event`, `status`, `spot-performance`, and `heartbeat` events, and also emits `score-update`, `score-snapshot`, and `storage-status` when score/storage state changes.
+The SSE stream emits `snapshot`, `event`, `status`, `spot-performance`, `storage-status`, and `heartbeat` events.
 
 ## Raw NDJSON Logs
 

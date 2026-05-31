@@ -165,12 +165,9 @@ export interface ApiStatus {
   lastEventByCategory: Record<string, string>;
   latency: LatencyStats;
   storage?: DurableStorageStatus;
-  workers?: WorkerStatusBundle;
   health?: StorageOperationalHealth;
   database?: DatabaseHealthStatus;
   writer?: StorageWriterHealth;
-  scoring?: ScoringHealthStatus;
-  marketData?: MarketDataHealthStatus;
   tableSizes?: Record<string, TableSizeStatus>;
   startupWarnings?: StartupWarning[];
 }
@@ -198,54 +195,14 @@ export interface DurableStorageStatus {
   averageWriteMs: number | null;
 }
 
-export interface WorkerStatus {
-  enabled: boolean;
-  state: 'disabled' | 'running' | 'degraded' | 'stopped';
-  running: boolean;
-  activeCoinCount?: number;
-  intervalMs: number;
-  lastRunStartedAt: string | null;
-  lastRunCompletedAt: string | null;
-  lastSuccessAt: string | null;
-  lastFailureAt: string | null;
-  lastError: string | null;
-  processed: number;
-  written: number;
-  skipped: number;
-  failed: number;
-  averageRunMs: number | null;
-}
-
-export interface ScoreWorkerStatus extends WorkerStatus {
-  scoreVersion: string;
-  windowsMinutes: number[];
-  queueDepth: number;
-  pendingCoinCount: number;
-  lastTriggeredAt: string | null;
-  lastTriggerReason: string | null;
-  written: number;
-  skipped: number;
-  writtenEvidence: number;
-  latestScoreTs: string | null;
-}
-
-export interface WorkerStatusBundle {
-  priceCollection: WorkerStatus;
-  forwardReturns: WorkerStatus;
-  scores: ScoreWorkerStatus;
-}
-
 export interface StorageStatusResponse {
   generatedAt: string;
   health?: StorageOperationalHealth;
   database?: DatabaseHealthStatus;
   writer?: StorageWriterHealth;
-  scoring?: ScoringHealthStatus;
-  marketData?: MarketDataHealthStatus;
   tableSizes?: Record<string, TableSizeStatus>;
   startupWarnings?: StartupWarning[];
   storage: DurableStorageStatus;
-  workers: WorkerStatusBundle;
 }
 
 export interface ClearEventDataResponse {
@@ -270,14 +227,37 @@ export interface ResetAllStoredDataResponse {
     bytesBefore: number | null;
     reason: string | null;
   };
-  runtime: {
-    clearedPendingScoreCoins: number;
-    clearedActivePriceCoins: number;
-  };
   snapshot: DashboardSnapshot;
   status: ApiStatus;
   storageStatus: StorageStatusResponse;
-  scoreSnapshot: ScoreSnapshotSseEvent;
+}
+
+export interface DeleteOldHistoryResponse {
+  generatedAt: string;
+  prunedAt: string;
+  retentionDays: number;
+  cutoff: string;
+  database: {
+    prunedAt: string;
+    cutoff: string;
+    retentionDays: number;
+    rowsDeleted: number;
+    tables: Array<{ table: string; rowsDeleted: number }>;
+  } | null;
+  rawLog: {
+    path: string;
+    enabled: boolean;
+    missing: boolean;
+    bytesBefore: number | null;
+    bytesAfter: number | null;
+    linesBefore: number;
+    linesAfter: number;
+    deletedLines: number;
+    invalidLinesKept: number;
+    reason: string | null;
+  };
+  status: ApiStatus;
+  storageStatus: StorageStatusResponse;
 }
 
 export interface TopSpotHistoryHit {
@@ -435,43 +415,6 @@ export interface StorageWriterHealth {
   averageWriteMs: number | null;
 }
 
-export interface ScoringHealthStatus {
-  enabled: boolean;
-  state: string;
-  queueDepth: number;
-  pendingCoinCount: number;
-  failed: number;
-  lastScoreRecompute: string | null;
-  latestScoreTs: string | null;
-  lastFailureAt: string | null;
-  lastError: string | null;
-}
-
-export interface LatestPriceTickStatus {
-  ts: string | null;
-  collectedAt: string | null;
-  source: string | null;
-  exchange: string | null;
-  market: string | null;
-  symbol: string | null;
-  coin: string | null;
-}
-
-export interface ForwardReturnBacklogStatus {
-  pending: number;
-  due: number;
-  missingPrice: number;
-  failed: number;
-  oldestDueTargetTs: string | null;
-}
-
-export interface MarketDataHealthStatus {
-  priceCollection: WorkerStatus;
-  latestPriceTick: LatestPriceTickStatus;
-  forwardReturns: WorkerStatus;
-  forwardReturnBacklog: ForwardReturnBacklogStatus;
-}
-
 export interface TableSizeStatus {
   estimatedRows: number;
   totalBytes: number;
@@ -481,283 +424,6 @@ export interface StartupWarning {
   code: string;
   severity: 'info' | 'warning' | 'critical';
   message: string;
-}
-
-export type ScoreSide = 'bull' | 'bear' | 'net';
-export type ScoreEvidenceSide = 'bull' | 'bear' | 'risk' | 'confidence';
-export type ScoreMarketRegime = 'bullish' | 'bearish' | 'conflicted' | 'neutral' | 'thin_data';
-
-export interface ScoreEvidenceSummary {
-  total: number;
-  topRuleKeys: string[];
-  feedKeys: string[];
-  sides: ScoreEvidenceSide[];
-}
-
-export interface ScoreSummary {
-  coin: string;
-  scoreConfigVersion: string;
-  windowMinutes: number;
-  latestScoreTs: string;
-  bullScore: number;
-  bearScore: number;
-  netScore: number;
-  confidenceScore: number;
-  rank: number;
-  updatedAt: string;
-  dominantSignal: string | null;
-  marketRegime: ScoreMarketRegime | null;
-  primaryReason: string | null;
-  riskTags: string[];
-  evidenceSummary: ScoreEvidenceSummary;
-  recentScoreDelta: number | null;
-  scoreState?: ScoreFlowState | string | null;
-  tradeAction?: ScoreTradeAction | string | null;
-  componentScores?: ScoreComponentScores | null;
-  flowBreakdown?: ScoreFlowBreakdownItem[] | null;
-}
-
-export type ScoreFlowState = 'clean_bull' | 'clean_bear' | 'derivatives_only_bull' | 'derivatives_only_bear' | 'hedged_conflict' | 'mixed' | 'thin_liquidity' | 'neutral';
-export type ScoreTradeAction = 'LONG_WATCH' | 'SHORT_WATCH' | 'WATCH' | 'AVOID' | 'NEUTRAL';
-export type ScoreComponentScores = Record<string, { bull: number; bear: number }>;
-
-export interface ScoreFlowBreakdownItem {
-  family?: string;
-  side?: string;
-  score?: number;
-  rawScore?: number;
-  maxScore?: number;
-  multiplier?: number;
-  effectiveHits?: number;
-  rawBeforeCap?: number;
-  volumeCap?: number;
-  activityCap?: number;
-  liquidityCap?: number;
-  hitPoints?: number;
-  subpoints?: Record<string, number | null>;
-  thinLiquidity?: boolean;
-  newestReceivedAt?: string | null;
-  [key: string]: unknown;
-}
-
-export interface ScoreFilters {
-  minConfidence: number;
-  halal: boolean | null;
-  exchange: string | null;
-  market: string | null;
-  updatedSince: string | null;
-}
-
-export interface ScoreListQuery {
-  side?: ScoreSide;
-  limit?: number;
-  minConfidence?: number;
-  halal?: boolean | null;
-  exchange?: ExchangeKey;
-  market?: ExchangeMarket;
-  updatedSince?: string | null;
-  windowMinutes?: number;
-  scoreConfigVersion?: string;
-}
-
-export interface ScoresListResponse {
-  generatedAt: string;
-  enabled: boolean;
-  kind: 'top' | 'current';
-  scoreConfigVersion: string;
-  windowMinutes: number;
-  side: ScoreSide;
-  limit: number;
-  filters: ScoreFilters;
-  total: number;
-  scores: ScoreSummary[];
-  state?: 'disabled';
-  reason?: string;
-}
-
-export interface ScoreDetailResponse {
-  generatedAt: string;
-  enabled: boolean;
-  coin: string;
-  scoreConfigVersion: string;
-  windowMinutes: number;
-  side: ScoreSide;
-  limit: number;
-  filters: ScoreFilters;
-  score: ScoreSummary | null;
-}
-
-export interface ScoreTimelinePoint {
-  scoreSnapshotId: string;
-  ts: string;
-  coin: string;
-  scoreConfigVersion: string;
-  windowMinutes: number;
-  bullScore: number;
-  bearScore: number;
-  netScore: number;
-  confidenceScore: number;
-  eventCount: number;
-  evidenceCount: number;
-  dominantSignal: string | null;
-  marketRegime: ScoreMarketRegime | null;
-  primaryReason: string | null;
-  riskTags: string[];
-  evidenceSummary: ScoreEvidenceSummary;
-  previousNetScore: number | null;
-  netScoreDelta: number | null;
-  recentScoreDelta: number | null;
-  scoreHash: string | null;
-  evidenceHash: string | null;
-  computedAt: string;
-  scoreState?: ScoreFlowState | string | null;
-  tradeAction?: ScoreTradeAction | string | null;
-  componentScores?: ScoreComponentScores | null;
-  flowBreakdown?: ScoreFlowBreakdownItem[] | null;
-}
-
-export interface ScoreTimelineResponse {
-  generatedAt: string;
-  enabled: boolean;
-  coin: string;
-  scoreConfigVersion: string;
-  windowMinutes: number;
-  side: ScoreSide;
-  limit: number;
-  filters: ScoreFilters;
-  snapshots: ScoreTimelinePoint[];
-}
-
-export interface ScoreEvidenceItem {
-  evidenceKey: string;
-  scoreSnapshotId: string | null;
-  scoreTs: string;
-  windowMinutes: number;
-  coin: string;
-  eventId: string | null;
-  eventReceivedAt: string | null;
-  entryId: string | null;
-  feedKey: string;
-  signalKey: string;
-  ruleKey: string;
-  side: ScoreEvidenceSide;
-  contribution: number;
-  confidenceImpact: number;
-  weight: number;
-  decayMultiplier: number;
-  value: number | null;
-  unit: string | null;
-  reason: string;
-  source: 'entry' | 'event' | 'aggregate' | string;
-  sourceEventIds: string[];
-  sourceReceivedAt: string;
-  payload: Record<string, unknown>;
-}
-
-export interface ScoreEvidenceResponse {
-  generatedAt: string;
-  enabled: boolean;
-  coin: string;
-  scoreConfigVersion: string;
-  windowMinutes: number;
-  side: ScoreSide;
-  limit: number;
-  filters: ScoreFilters;
-  evidence: ScoreEvidenceItem[];
-}
-
-export interface ScoreMarketRegimeResponse {
-  generatedAt: string;
-  enabled: boolean;
-  scoreConfigVersion: string;
-  windowMinutes: number;
-  side: ScoreSide;
-  limit: number;
-  filters: ScoreFilters;
-  sampledCoins: number;
-  regime: ScoreMarketRegime;
-  bullishCoinCount: number;
-  bearishCoinCount: number;
-  mixedCount: number;
-  quietCount: number;
-  averageConfidence: number;
-  averageBullScore: number;
-  averageBearScore: number;
-  averageNetScore: number;
-  topSector: string | null;
-  topCategory: string | null;
-  dataFreshness: {
-    latestScoreTs: string | null;
-    oldestScoreTs: string | null;
-    latestAgeSeconds: number | null;
-  };
-  leaders: {
-    bull: ScoreSummary[];
-    bear: ScoreSummary[];
-    net: ScoreSummary[];
-  };
-}
-
-export interface ScoringConfigCurrentResponse {
-  generatedAt: string;
-  storageBacked: boolean;
-  config: {
-    scoreConfigVersion: string;
-    description: string;
-    active: boolean;
-    activatedAt: string | null;
-    retiredAt: string | null;
-    windows: Array<{ minutes: number; halfLifeMinutes: number; maxAgeMinutes: number }>;
-    sideSaturation: number;
-    materialChange: Record<string, number>;
-    confidence: Record<string, number>;
-    burst: { threshold: number; maxBonus: number };
-    rules: Array<Record<string, unknown>>;
-  };
-}
-
-export interface ScoreUpdateSseItem {
-  coin: string;
-  windowMinutes: number;
-  ts: string;
-  bullScore: number;
-  bearScore: number;
-  netScore: number;
-  confidenceScore: number;
-  dominantSignal: string | null;
-  marketRegime: ScoreMarketRegime;
-  previousNetScore: number | null;
-  netScoreDelta: number | null;
-  eventCount: number;
-  evidenceCount: number;
-  scoreHash: string;
-  evidenceHash: string;
-  scoreState?: ScoreFlowState | string | null;
-  tradeAction?: ScoreTradeAction | string | null;
-  componentScores?: ScoreComponentScores | null;
-  flowBreakdown?: ScoreFlowBreakdownItem[] | null;
-}
-
-export interface ScoreUpdateSseEvent {
-  generatedAt: string;
-  reason: string;
-  scoreVersion: string;
-  asOf: string;
-  processed: number;
-  written: number;
-  skipped: number;
-  failed: number;
-  evidenceWritten: number;
-  scores: ScoreUpdateSseItem[];
-}
-
-export interface ScoreSnapshotSseEvent {
-  generatedAt: string;
-  scoreVersion: string;
-  asOf: string | null;
-  windowsMinutes: number[];
-  scores: ScoreUpdateSseItem[];
-  health: ScoreWorkerStatus;
 }
 
 export type StreamState = 'connecting' | 'open' | 'error' | 'closed';

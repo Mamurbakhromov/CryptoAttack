@@ -29,7 +29,6 @@ fi
 curl -fsS --max-time 15 "$BASE_URL/health" >/dev/null
 curl -fsS --max-time 15 "${AUTH_ARGS[@]}" "$BASE_URL/api/status" >/dev/null
 curl -fsS --max-time 15 "${AUTH_ARGS[@]}" "$BASE_URL/api/storage/status" >/dev/null
-curl -fsS --max-time 15 "${AUTH_ARGS[@]}" "$BASE_URL/api/scores/top?side=net&limit=5" >/dev/null
 
 sse_output="$(mktemp)"
 trap 'rm -f "$sse_output"' EXIT

@@ -88,12 +88,27 @@ describe('StatusBar', () => {
 
     await user.click(screen.getByRole('button', { name: 'Reset all data' }));
     expect(screen.getByRole('dialog', { name: 'Confirm reset all stored data' })).toBeInTheDocument();
-    expect(screen.getByText('Deletes events, scores, popup evidence, market labels, and the raw event log. Fresh websocket data will start filling again.')).toBeInTheDocument();
+    expect(screen.getByText('Deletes events, event history, and the raw event log. Fresh websocket data will start filling again.')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Reset stored data' }));
 
     expect(onResetAllStoredData).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('dialog', { name: 'Confirm reset all stored data' })).not.toBeInTheDocument();
+  });
+
+  it('asks for confirmation before deleting history older than seven days', async () => {
+    const user = userEvent.setup();
+    const onDeleteOldHistory = vi.fn();
+    render(<StatusBarHarness adminUnlocked onDeleteOldHistory={onDeleteOldHistory} />);
+
+    await user.click(screen.getByRole('button', { name: 'Delete >7d history' }));
+    expect(screen.getByRole('dialog', { name: 'Confirm delete old history' })).toBeInTheDocument();
+    expect(screen.getByText('Deletes database history and raw log lines older than 7 days. Recent data is kept.')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Delete old history' }));
+
+    expect(onDeleteOldHistory).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog', { name: 'Confirm delete old history' })).not.toBeInTheDocument();
   });
 
   it('hides destructive reset controls until an admin token is stored locally', async () => {
@@ -103,6 +118,7 @@ describe('StatusBar', () => {
 
     expect(screen.queryByRole('button', { name: 'Clear events' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Reset all data' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete >7d history' })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Admin' }));
     await user.type(screen.getByLabelText('Admin token'), 'admin-secret');
@@ -118,7 +134,8 @@ function StatusBarHarness({
   onAdminTokenSave = vi.fn(),
   onAdminTokenClear = vi.fn(),
   onClearEventData = vi.fn(),
-  onResetAllStoredData = vi.fn()
+  onResetAllStoredData = vi.fn(),
+  onDeleteOldHistory = vi.fn()
 }: {
   status?: ReturnType<typeof makeStatus> | null;
   adminUnlocked?: boolean;
@@ -126,6 +143,7 @@ function StatusBarHarness({
   onAdminTokenClear?: () => void;
   onClearEventData?: () => void;
   onResetAllStoredData?: () => void;
+  onDeleteOldHistory?: () => void;
 }) {
   const [classificationFilter, setClassificationFilter] = useState<CoinClassificationFilter>([]);
   const [exchangeFilter, setExchangeFilter] = useState<ExchangeFilter>([]);
@@ -135,7 +153,6 @@ function StatusBarHarness({
     <StatusBar
       status={status}
       lastEventTime={null}
-      latency={{ latestMs: null, averageMs: null, samples: 0 }}
       streamState="open"
       paused={false}
       queuedCount={0}
@@ -149,6 +166,8 @@ function StatusBarHarness({
       eventClearMessage={null}
       dataResetState="idle"
       dataResetMessage={null}
+      historyPruneState="idle"
+      historyPruneMessage={null}
       adminUnlocked={adminUnlocked}
       onTogglePause={vi.fn()}
       onToggleSound={vi.fn()}
@@ -161,6 +180,7 @@ function StatusBarHarness({
       onAdminTokenClear={onAdminTokenClear}
       onClearEventData={onClearEventData}
       onResetAllStoredData={onResetAllStoredData}
+      onDeleteOldHistory={onDeleteOldHistory}
     />
   );
 }

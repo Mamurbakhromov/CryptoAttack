@@ -5,8 +5,6 @@ import type { SpotPerformanceService } from '../exchanges/spotPerformance.js';
 import type { SpotPerformanceResponse } from '../exchanges/types.js';
 import type { EventStore } from '../events/eventStore.js';
 import type { ApiStatus, NormalizedEvent } from '../events/types.js';
-import type { WorkerStatus } from '../market/workerStatus.js';
-import type { ScoreUpdateSseEvent, ScoreUpdateSseItem, ScoreWorkerStatus } from '../scoring/scoreWorker.js';
 
 interface SseClient {
   id: number;
@@ -15,34 +13,18 @@ interface SseClient {
 
 interface SseHubOptions {
   corsOrigin: string;
-  getScoreSnapshot?: () => ScoreSnapshotSseEvent | null;
   getStorageStatus?: () => StorageStatusSseEvent | null;
-}
-
-export interface ScoreSnapshotSseEvent {
-  generatedAt: string;
-  scoreVersion: string;
-  asOf: string | null;
-  windowsMinutes: number[];
-  scores: ScoreUpdateSseItem[];
-  health: ScoreWorkerStatus;
 }
 
 export interface StorageStatusSseEvent {
   generatedAt: string;
   storage: DurableIngestionStatus;
-  workers: {
-    priceCollection: WorkerStatus;
-    forwardReturns: WorkerStatus;
-    scores: ScoreWorkerStatus;
-  };
 }
 
 export class SseHub {
   private readonly clients = new Map<number, SseClient>();
   private nextClientId = 1;
   private readonly heartbeatTimer: NodeJS.Timeout;
-  private latestScoreSnapshot: ScoreSnapshotSseEvent | null = null;
   private latestStorageStatus: StorageStatusSseEvent | null = null;
   private readonly onStoreEvent = (event: NormalizedEvent) => {
     this.broadcast('event', event);
@@ -94,8 +76,6 @@ export class SseHub {
     for (const response of this.spotPerformance?.getCachedPerformanceResponses() ?? []) {
       this.send(client, 'spot-performance', response);
     }
-    const scoreSnapshot = this.latestScoreSnapshot ?? this.options.getScoreSnapshot?.() ?? null;
-    if (scoreSnapshot) this.send(client, 'score-snapshot', scoreSnapshot);
     const storageStatus = this.latestStorageStatus ?? this.options.getStorageStatus?.() ?? null;
     if (storageStatus) this.send(client, 'storage-status', storageStatus);
     this.send(client, 'heartbeat', { now: new Date().toISOString() });
@@ -114,15 +94,6 @@ export class SseHub {
       client.reply.raw.end();
     }
     this.clients.clear();
-  }
-
-  broadcastScoreUpdate(event: ScoreUpdateSseEvent): void {
-    this.broadcast('score-update', event);
-  }
-
-  broadcastScoreSnapshot(event: ScoreSnapshotSseEvent): void {
-    this.latestScoreSnapshot = event;
-    this.broadcast('score-snapshot', event);
   }
 
   broadcastStorageStatus(event: StorageStatusSseEvent): void {

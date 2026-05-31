@@ -22,26 +22,9 @@ describe('loadConfig database settings', () => {
       timescale: {
         compressionEnabled: false,
         tables: {
-          raw_events: { timeColumn: 'received_at', retentionDays: 30, compressionAfterDays: 2 },
-          price_ticks: { timeColumn: 'ts', retentionDays: 180, compressionAfterDays: 7 },
-          score_snapshots: { timeColumn: 'ts', retentionDays: 365, compressionAfterDays: 14 }
+          raw_events: { timeColumn: 'received_at', retentionDays: 30, compressionAfterDays: 2 }
         }
       }
-    });
-    expect(config.priceCollection).toEqual({
-      enabled: false,
-      intervalMs: 60_000,
-      activeCoinTtlMs: 86_400_000,
-      forwardReturnHorizonsMinutes: [5, 15, 60, 240, 1_440]
-    });
-    expect(config.scores).toEqual({
-      enabled: false,
-      version: 'flow-v2',
-      recalculationIntervalMs: 30_000,
-      recomputeDebounceMs: 1_000,
-      windowsMinutes: [5, 15, 60, 240, 1_440],
-      batchCoins: 100,
-      maxQueueDepth: 10_000
     });
   });
 
@@ -81,20 +64,7 @@ describe('loadConfig database settings', () => {
       DATABASE_WRITE_RETRY_MAX_MS: '100',
       DATABASE_WRITE_DRAIN_TIMEOUT_MS: '1000',
       RAW_EVENTS_RETENTION_DAYS: '45',
-      PRICE_TICKS_RETENTION_DAYS: '120',
-      SCORE_SNAPSHOTS_RETENTION_DAYS: '240',
-      TIMESCALE_COMPRESSION_ENABLED: 'true',
-      PRICE_COLLECTION_ENABLED: 'true',
-      PRICE_COLLECTION_INTERVAL_MS: '15000',
-      PRICE_COLLECTION_ACTIVE_COIN_TTL_MS: '60000',
-      FORWARD_RETURN_HORIZONS_MINUTES: '60,5,15,5',
-      SCORES_ENABLED: 'true',
-      SCORES_VERSION: 'golden-v1',
-      SCORES_RECALC_INTERVAL_MS: '20000',
-      SCORES_RECOMPUTE_DEBOUNCE_MS: '500',
-      SCORES_WINDOWS_MINUTES: '15,5,60,15',
-      SCORES_BATCH_COINS: '25',
-      SCORES_MAX_QUEUE_DEPTH: '100'
+      TIMESCALE_COMPRESSION_ENABLED: 'true'
     });
 
     expect(config.database).toEqual({
@@ -113,31 +83,10 @@ describe('loadConfig database settings', () => {
       timescale: {
         compressionEnabled: true,
         tables: {
-          raw_events: { timeColumn: 'received_at', retentionDays: 45, compressionAfterDays: 2 },
-          price_ticks: { timeColumn: 'ts', retentionDays: 120, compressionAfterDays: 7 },
-          score_snapshots: { timeColumn: 'ts', retentionDays: 240, compressionAfterDays: 14 }
+          raw_events: { timeColumn: 'received_at', retentionDays: 45, compressionAfterDays: 2 }
         }
       }
     });
-    expect(config.priceCollection).toEqual({
-      enabled: true,
-      intervalMs: 15_000,
-      activeCoinTtlMs: 60_000,
-      forwardReturnHorizonsMinutes: [5, 15, 60]
-    });
-    expect(config.scores).toEqual({
-      enabled: true,
-      version: 'golden-v1',
-      recalculationIntervalMs: 20_000,
-      recomputeDebounceMs: 500,
-      windowsMinutes: [5, 15, 60],
-      batchCoins: 25,
-      maxQueueDepth: 100
-    });
-  });
-
-  it('requires database storage when scores are enabled', () => {
-    expect(() => loadConfig({ SCORES_ENABLED: 'true' })).toThrow('DATABASE_STORAGE_ENABLED=true is required when SCORES_ENABLED=true');
   });
 
   it('requires database storage when production startup requires database availability', () => {

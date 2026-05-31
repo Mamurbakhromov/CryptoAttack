@@ -8,11 +8,11 @@ import type { Pool } from 'pg';
 import { loadConfig, type AppConfig } from '../config.js';
 import { backfillRawEventsFromNdjson } from './backfillRawEvents.js';
 import { EventIngestionRepository } from './eventRepository.js';
-import { closePostgresPool, createPostgresPool, isLocalDatabaseUrl, verifyPostgresConnection } from './postgres.js';
-import { formatMigrationStatus, getMigrationStatus, runMigrations } from './migrations.js';
+import { createPostgresPool, isLocalDatabaseUrl, verifyPostgresConnection } from './postgres.js';
+import { formatMigrationStatus, getMigrationStatus, runMigrations, type MigrationQueryable, type MigrationStatus } from './migrations.js';
 import { resolveDefaultMigrationsDir } from './paths.js';
 
-type DatabaseCommand = 'migrate' | 'status' | 'reset' | 'backfill';
+type DatabaseCommand = 'migrate' | 'status' | 'verify' | 'reset' | 'backfill';
 
 interface OutputWriter {
   write(chunk: string): void;
@@ -25,6 +25,13 @@ interface DatabaseCommandOptions {
   stderr?: OutputWriter;
   migrationsDir?: string;
   args?: string[];
+  createPool?: (config: AppConfig['database']) => CommandPool | null;
+  verifyConnection?: (pool: CommandPool) => Promise<void>;
+}
+
+interface CommandPool {
+  query: MigrationQueryable['query'];
+  end(): Promise<void>;
 }
 
 const resetTables = [
@@ -51,10 +58,10 @@ export async function runDatabaseCommand(commandInput: string | undefined, optio
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
   let config: AppConfig | null = null;
-  let pool: Pool | null = null;
+  let pool: CommandPool | null = null;
 
   if (!command) {
-    stderr.write('Usage: db <migrate|status|reset>\n');
+    stderr.write('Usage: db <migrate|status|verify|reset|backfill>\n');
     return 1;
   }
 
@@ -69,13 +76,13 @@ export async function runDatabaseCommand(commandInput: string | undefined, optio
       return 1;
     }
 
-    pool = createPostgresPool(config.database);
+    pool = options.createPool ? options.createPool(config.database) : createPostgresPool(config.database);
     if (!pool) throw new Error('Database storage is disabled');
-    await verifyPostgresConnection(pool);
+    await (options.verifyConnection ?? verifyPostgresConnection)(pool);
 
     const migrationsDir = options.migrationsDir ?? resolveDefaultMigrationsDir(cwd);
     if (command === 'migrate') {
-      const status = await runMigrations(pool, migrationsDir);
+      const status = await runMigrations(pool as Pool, migrationsDir);
       stdout.write(`Migrations complete.\n${formatMigrationStatus(status)}\n`);
       return 0;
     }
@@ -86,9 +93,20 @@ export async function runDatabaseCommand(commandInput: string | undefined, optio
       return 0;
     }
 
+    if (command === 'verify') {
+      const status = await getMigrationStatus(pool, migrationsDir);
+      stdout.write(`${formatMigrationStatus(status)}\n`);
+      if (!isMigrationStatusClean(status)) {
+        stderr.write('Database migrations are not clean. Apply pending migrations and resolve checksum mismatches before deploying.\n');
+        return 1;
+      }
+      stdout.write('Migrations verified.\n');
+      return 0;
+    }
+
     if (command === 'backfill') {
       const backfillOptions = parseBackfillArgs(options.args ?? [], config);
-      const repository = new EventIngestionRepository(pool);
+      const repository = new EventIngestionRepository(pool as Pool);
       const result = await backfillRawEventsFromNdjson({
         path: backfillOptions.path,
         repository,
@@ -110,7 +128,7 @@ export async function runDatabaseCommand(commandInput: string | undefined, optio
     stderr.write(`Database command failed: ${sanitizeDatabaseErrorMessage(error, config?.database.url ?? null)}\n`);
     return 1;
   } finally {
-    await closePostgresPool(pool);
+    await pool?.end();
   }
 }
 
@@ -121,8 +139,12 @@ export function sanitizeDatabaseErrorMessage(error: unknown, databaseUrl: string
 }
 
 function parseCommand(value: string | undefined): DatabaseCommand | null {
-  if (value === 'migrate' || value === 'status' || value === 'reset' || value === 'backfill') return value;
+  if (value === 'migrate' || value === 'status' || value === 'verify' || value === 'reset' || value === 'backfill') return value;
   return null;
+}
+
+function isMigrationStatusClean(status: MigrationStatus): boolean {
+  return status.pendingCount === 0 && status.migrations.every((migration) => migration.checksumMatches !== false);
 }
 
 function parseBackfillArgs(args: string[], config: AppConfig): { path: string; limit: number | undefined } {
@@ -153,7 +175,7 @@ function assertSafeLocalReset(config: AppConfig, env: NodeJS.ProcessEnv): void {
   }
 }
 
-async function resetLocalDatabase(pool: Pool): Promise<void> {
+async function resetLocalDatabase(pool: CommandPool): Promise<void> {
   await pool.query('begin');
   try {
     await pool.query(`drop table if exists ${resetTables.join(', ')} cascade`);

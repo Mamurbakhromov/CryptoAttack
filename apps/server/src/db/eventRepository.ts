@@ -37,6 +37,19 @@ export interface ClearEventDataResult {
   tables: string[];
 }
 
+export interface HistoryPruneTableResult {
+  table: string;
+  rowsDeleted: number;
+}
+
+export interface DeleteHistoryOlderThanResult {
+  prunedAt: string;
+  cutoff: string;
+  retentionDays: number;
+  rowsDeleted: number;
+  tables: HistoryPruneTableResult[];
+}
+
 interface QueryableClient {
   query<T extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]): Promise<QueryResult<T>>;
 }
@@ -118,11 +131,6 @@ const eventDataTables = [
 ] as const;
 
 const allStoredDataTables = [
-  'score_evidence',
-  'coin_score_current',
-  'score_snapshots',
-  'forward_returns',
-  'price_ticks',
   'event_entries',
   'normalized_events',
   'raw_events',
@@ -131,6 +139,18 @@ const allStoredDataTables = [
   'raw_event_keys',
   'ingestion_errors'
 ] as const;
+
+const historyPruneTables = [
+  { table: 'event_entries', timeColumn: 'received_at' },
+  { table: 'normalized_events', timeColumn: 'received_at' },
+  { table: 'raw_events', timeColumn: 'received_at' },
+  { table: 'event_entry_keys', timeColumn: 'received_at' },
+  { table: 'normalized_event_keys', timeColumn: 'received_at' },
+  { table: 'raw_event_keys', timeColumn: 'raw_received_at' },
+  { table: 'ingestion_errors', timeColumn: 'failed_at' }
+] as const;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export class EventMaintenanceRepository {
   constructor(private readonly pool: Pool | ConnectablePool) {}
@@ -141,6 +161,32 @@ export class EventMaintenanceRepository {
 
   async clearAllStoredData(): Promise<ClearEventDataResult> {
     return this.truncateTables([...allStoredDataTables]);
+  }
+
+  async deleteHistoryOlderThan(retentionDays: number, now = new Date()): Promise<DeleteHistoryOlderThanResult> {
+    const cutoff = new Date(now.getTime() - retentionDays * DAY_MS).toISOString();
+    const client = await this.pool.connect();
+    try {
+      await client.query('begin');
+      const tables: HistoryPruneTableResult[] = [];
+      for (const { table, timeColumn } of historyPruneTables) {
+        const result = await client.query(`delete from ${table} where ${timeColumn} < $1`, [cutoff]);
+        tables.push({ table, rowsDeleted: result.rowCount ?? 0 });
+      }
+      await client.query('commit');
+      return {
+        prunedAt: new Date().toISOString(),
+        cutoff,
+        retentionDays,
+        rowsDeleted: tables.reduce((sum, table) => sum + table.rowsDeleted, 0),
+        tables
+      };
+    } catch (error) {
+      await rollbackQuietly(client);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   private async truncateTables(tables: string[]): Promise<ClearEventDataResult> {

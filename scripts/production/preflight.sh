@@ -52,7 +52,13 @@ require_command pm2
 require_command caddy
 
 node_major="$(node -p "Number(process.versions.node.split('.')[0])")"
-[[ "$node_major" -ge 24 ]] || fail "Node 24 or newer is required; found $(node -v)"
+[[ "$node_major" -eq 24 ]] || fail "Node 24.x is required; found $(node -v). Run nvm install && nvm use, or install NodeSource 24.x."
+
+[[ -f "$ROOT_DIR/.node-version" ]] || fail ".node-version is required"
+[[ -f "$ROOT_DIR/.nvmrc" ]] || fail ".nvmrc is required"
+[[ "$(tr -d '[:space:]' < "$ROOT_DIR/.node-version")" == "24" ]] || fail ".node-version must be 24"
+[[ "$(tr -d '[:space:]' < "$ROOT_DIR/.nvmrc")" == "24" ]] || fail ".nvmrc must be 24"
+grep -qx 'engine-strict=true' "$ROOT_DIR/.npmrc" || fail ".npmrc must set engine-strict=true"
 
 pnpm_version="$(pnpm --version)"
 [[ "$pnpm_version" == "9.15.4" ]] || fail "pnpm 9.15.4 is required; found $pnpm_version"
@@ -74,9 +80,6 @@ require_flag DASHBOARD_AUTH_ENABLED true
 require_flag DATABASE_STORAGE_ENABLED true
 require_flag DATABASE_REQUIRED_ON_START true
 require_flag DATABASE_MIGRATIONS_ON_START false
-require_flag PRICE_COLLECTION_ENABLED true
-require_flag SCORES_ENABLED true
-require_flag SCORES_VERSION flow-v2
 require_flag TIMESCALE_COMPRESSION_ENABLED false
 
 require_value CRYPTOATTACK_API_KEY

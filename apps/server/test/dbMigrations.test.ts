@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import type { QueryResult, QueryResultRow } from 'pg';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -59,7 +60,20 @@ describe('database migrations', () => {
     expect(formatMigrationStatus(status)).toContain('applied checksum-mismatch 000001_first.sql');
   });
 
-  it('declares the required initial storage and scoring schema', async () => {
+  it('preserves historical migrations and declares scoring cleanup as a forward migration', async () => {
+    const migrations = await loadMigrationFiles(fileURLToPath(new URL('../migrations', import.meta.url)));
+    expect(migrations.map((migration) => migration.version)).toEqual([
+      '000001',
+      '000002',
+      '000003',
+      '000004',
+      '000005',
+      '000006',
+      '000007',
+      '000008',
+      '000009'
+    ]);
+
     const sql = await readFile(new URL('../migrations/000001_initial_timescale_schema.sql', import.meta.url), 'utf8');
     const requiredTables = [
       'schema_migrations',
@@ -90,31 +104,24 @@ describe('database migrations', () => {
     expect(sql).toContain("create_hypertable('price_ticks', 'ts'");
     expect(sql).toContain("create_hypertable('score_snapshots', 'ts'");
     expect(sql).toContain("create_hypertable('forward_returns', 'event_received_at'");
+
     const priceContextSql = await readFile(new URL('../migrations/000003_price_labels_context.sql', import.meta.url), 'utf8');
     expect(priceContextSql).toContain('alter table price_ticks add column if not exists base_asset text');
     expect(priceContextSql).toContain('alter table price_ticks add column if not exists collected_at timestamptz');
     expect(priceContextSql).toContain('alter table forward_returns add column if not exists entry_id uuid');
-    expect(priceContextSql).toContain('create unique index if not exists forward_returns_entry_horizon_idx');
+
     const scoringSql = await readFile(new URL('../migrations/000004_scoring_evidence_fields.sql', import.meta.url), 'utf8');
     expect(scoringSql).toContain("check (side in ('bull', 'bear', 'risk', 'confidence'))");
     expect(scoringSql).toContain('alter table score_evidence add column if not exists rule_key text');
-    expect(scoringSql).toContain('alter table score_evidence add column if not exists contribution double precision');
-    expect(scoringSql).toContain('create unique index if not exists score_evidence_key_idx');
-    const backtestSql = await readFile(new URL('../migrations/000005_backtest_analytics_indexes.sql', import.meta.url), 'utf8');
-    expect(backtestSql).toContain('create index if not exists score_snapshots_backtest_idx');
-    expect(backtestSql).toContain('create index if not exists score_evidence_backtest_idx');
-    expect(backtestSql).toContain('create index if not exists forward_returns_backtest_event_idx');
-    const compressionSql = await readFile(new URL('../migrations/000006_timescale_compression_settings.sql', import.meta.url), 'utf8');
-    expect(compressionSql).toContain('alter table raw_events set');
-    expect(compressionSql).toContain('alter table price_ticks set');
-    expect(compressionSql).toContain('alter table score_snapshots set');
-    expect(compressionSql).toContain('timescaledb.compress');
-    const forwardReturnIdentitySql = await readFile(new URL('../migrations/000007_forward_return_identity.sql', import.meta.url), 'utf8');
-    expect(forwardReturnIdentitySql).toContain('alter table forward_returns drop constraint if exists forward_returns_pkey');
-    expect(forwardReturnIdentitySql).toContain('create unique index if not exists forward_returns_event_horizon_null_entry_idx');
+
     const currentScorePayloadSql = await readFile(new URL('../migrations/000008_current_score_payload.sql', import.meta.url), 'utf8');
     expect(currentScorePayloadSql).toContain("alter table coin_score_current add column if not exists snapshot_payload jsonb not null default '{}'::jsonb");
-    expect(currentScorePayloadSql).toContain('update coin_score_current c');
+
+    const cleanupSql = await readFile(new URL('../migrations/000009_remove_scoring_storage.sql', import.meta.url), 'utf8');
+    expect(cleanupSql).toContain('drop table if exists forward_returns cascade');
+    expect(cleanupSql).toContain('drop table if exists score_evidence cascade');
+    expect(cleanupSql).toContain('drop table if exists score_snapshots cascade');
+    expect(cleanupSql).toContain('drop table if exists price_ticks cascade');
   });
 });
 

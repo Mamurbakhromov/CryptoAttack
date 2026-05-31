@@ -12,6 +12,26 @@ fail() {
   exit 1
 }
 
+check_migration_status() {
+  local require_clean="$1"
+  local output
+
+  if ! output="$(DATABASE_STORAGE_ENABLED=true pnpm db:status 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    fail "database migration status check failed"
+  fi
+
+  printf '%s\n' "$output"
+
+  if grep -q 'checksum-mismatch' <<<"$output"; then
+    fail "database migration checksum mismatch detected"
+  fi
+
+  if [[ "$require_clean" == "true" ]] && grep -Eq 'Migrations: [0-9]+ applied, [1-9][0-9]* pending' <<<"$output"; then
+    fail "database migrations are still pending after migrate"
+  fi
+}
+
 [[ -f "$ENV_FILE" ]] || fail "missing env file at $ENV_FILE"
 
 set -a
@@ -44,13 +64,15 @@ docker compose --env-file "$ENV_FILE" up -d postgres
 "$SCRIPT_DIR/backup-postgres.sh"
 
 pnpm install --frozen-lockfile
+pnpm audit:prod
 pnpm test
 pnpm typecheck
 pnpm build
 
-DATABASE_STORAGE_ENABLED=true pnpm db:status
+check_migration_status false
 DATABASE_STORAGE_ENABLED=true pnpm db:migrate
-DATABASE_STORAGE_ENABLED=true pnpm db:status
+DATABASE_STORAGE_ENABLED=true pnpm db:verify
+check_migration_status true
 
 pm2 startOrReload ecosystem.config.cjs --env production
 "$SCRIPT_DIR/smoke.sh" "${WEB_ORIGIN:-}"

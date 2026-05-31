@@ -15,7 +15,8 @@ describe('Timescale policy application', () => {
     expect(result.results.filter((row) => row.policy === 'compression').every((row) => row.action === 'skipped')).toBe(true);
     expect(pool.sql()).toContain("select add_retention_policy('raw_events'::regclass");
     expect(pool.sql()).not.toContain('add_compression_policy');
-    expect(pool.queries.find((query) => query.sql.includes("add_retention_policy('price_ticks'"))?.values).toEqual([180]);
+    expect(pool.sql()).not.toContain('price_ticks');
+    expect(pool.sql()).not.toContain('score_snapshots');
   });
 
   it('applies compression policies using derived windows when enabled', async () => {
@@ -50,7 +51,7 @@ class FakePolicyPool {
     this.queries.push({ sql, values });
     if (sql.includes('pg_extension')) return { rows: [{ exists: this.options.timescaleInstalled ?? true }] as unknown as T[] } as QueryResult<T>;
     if (sql.includes('timescaledb_information.hypertables')) {
-      return { rows: [{ hypertable_name: 'raw_events' }, { hypertable_name: 'price_ticks' }, { hypertable_name: 'score_snapshots' }] as unknown as T[] } as QueryResult<T>;
+      return { rows: [{ hypertable_name: 'raw_events' }] as unknown as T[] } as QueryResult<T>;
     }
     return { rows: [] as T[] } as QueryResult<T>;
   }

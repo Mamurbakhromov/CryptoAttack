@@ -6,11 +6,11 @@ Production defaults:
 
 - Node 24 LTS with `pnpm@9.15.4`.
 - Caddy owns public `80/443` and proxies to `127.0.0.1:3001`.
-- PM2 runs one backend process because ingestion, scoring, and queues are in-process.
+- PM2 runs one backend process because ingestion queues are in-process.
 - TimescaleDB runs locally through Docker Compose and binds Postgres to `127.0.0.1`.
 - `DATABASE_MIGRATIONS_ON_START=false`; migrations run explicitly during deploy.
 - `DASHBOARD_AUTH_TOKEN` is for dashboard/API reads. `DASHBOARD_ADMIN_TOKEN` is separate and required for destructive storage reset routes.
-- `SCORES_VERSION=flow-v2`, durable storage, price collection, and scoring are enabled.
+- Durable event storage is enabled.
 
 ## 1. Server Bootstrap
 
@@ -119,9 +119,6 @@ DASHBOARD_AUTH_ENABLED=true
 DATABASE_STORAGE_ENABLED=true
 DATABASE_REQUIRED_ON_START=true
 DATABASE_MIGRATIONS_ON_START=false
-PRICE_COLLECTION_ENABLED=true
-SCORES_ENABLED=true
-SCORES_VERSION=flow-v2
 TIMESCALE_COMPRESSION_ENABLED=false
 ```
 
@@ -135,7 +132,12 @@ docker compose ps
 Install, verify, and build:
 
 ```bash
+nvm install
+nvm use
+corepack enable
+corepack prepare pnpm@9.15.4 --activate
 pnpm install --frozen-lockfile
+pnpm audit --audit-level moderate
 pnpm test
 pnpm typecheck
 pnpm build
@@ -146,7 +148,7 @@ Run migrations explicitly:
 ```bash
 DATABASE_STORAGE_ENABLED=true pnpm db:status
 DATABASE_STORAGE_ENABLED=true pnpm db:migrate
-DATABASE_STORAGE_ENABLED=true pnpm db:status
+DATABASE_STORAGE_ENABLED=true pnpm db:verify
 ```
 
 Start the app with PM2:
@@ -191,8 +193,8 @@ The deploy script:
 - runs preflight checks;
 - starts local Postgres if needed;
 - creates and verifies a custom-format Postgres dump;
-- runs install, tests, typecheck, and build;
-- checks migration status, runs migrations, then checks status again;
+- runs install, dependency audit, tests, typecheck, and build;
+- checks for migration checksum mismatches, runs migrations, then verifies no migrations remain pending;
 - reloads PM2;
 - runs HTTP/API/SSE smoke checks;
 - saves PM2 state.
@@ -262,7 +264,7 @@ pm2 startOrReload ecosystem.config.cjs --env production
 pm2 save
 ```
 
-After restore, inspect `/api/storage/status` and `/api/scores/top`. Storage health may be `healthy` immediately, or it may show sparse score/price state until fresh live data arrives.
+After restore, inspect `/api/storage/status`. Storage health may be `healthy` immediately, or it may show as waiting for fresh live data.
 
 ## 6. Code Rollback
 
@@ -291,7 +293,6 @@ The script performs these checks:
 curl https://your-real-domain/health
 curl -H "Authorization: Bearer $DASHBOARD_AUTH_TOKEN" https://your-real-domain/api/status
 curl -H "Authorization: Bearer $DASHBOARD_AUTH_TOKEN" https://your-real-domain/api/storage/status
-curl -H "Authorization: Bearer $DASHBOARD_AUTH_TOKEN" "https://your-real-domain/api/scores/top?side=net&limit=5"
 timeout 20s curl -N -H "Authorization: Bearer $DASHBOARD_AUTH_TOKEN" https://your-real-domain/api/stream
 ```
 
@@ -309,15 +310,26 @@ Destructive maintenance routes require both:
 Routes:
 
 - `DELETE /api/storage/events`
+- `DELETE /api/storage/history/older-than-7-days`
 - `DELETE /api/storage/all-data`
 
-Prefer the dashboard UI admin-token unlock for manual maintenance. Do not put admin tokens in shared screenshots, URLs, shell history, or reverse-proxy logs.
+Prefer the dashboard UI admin-token unlock for manual maintenance. The seven-day cleanup button deletes durable history and raw log lines older than seven days while keeping recent data. Do not put admin tokens in shared screenshots, URLs, shell history, or reverse-proxy logs.
 
 ## 9. Troubleshooting
 
 Preflight fails on Node:
 
-- Install Node 24 and re-run `corepack prepare pnpm@9.15.4 --activate`.
+- Run `nvm install && nvm use`, or install NodeSource 24.x, then re-run `corepack prepare pnpm@9.15.4 --activate`.
+
+Deploy fails on dependency audit:
+
+- Run `pnpm audit --audit-level moderate` locally on Node 24 and update or override the affected dependency before deploying.
+
+Deploy fails on migration verification:
+
+- Run `DATABASE_STORAGE_ENABLED=true pnpm db:status`.
+- If output contains `checksum-mismatch`, stop and restore the original migration file rather than editing production `schema_migrations`.
+- If migrations are pending after `db:migrate`, inspect the migration error before restarting PM2.
 
 Preflight fails on `.env` permissions:
 
@@ -348,12 +360,6 @@ SSE connects then stalls:
 - Confirm `/api/status` counters and `lastEventTime` are moving.
 - Confirm Caddy uses `flush_interval -1`.
 - Check `pm2 logs cryptoattack-dashboard`.
-
-Scores are empty:
-
-- Confirm `SCORES_ENABLED=true`, `PRICE_COLLECTION_ENABLED=true`, and `DATABASE_STORAGE_ENABLED=true`.
-- Confirm migrations report zero pending.
-- New deployments may need live data before score tables are populated.
 
 PM2 process dies after restart:
 

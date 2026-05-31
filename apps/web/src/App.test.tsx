@@ -17,14 +17,8 @@ const apiMocks = vi.hoisted(() => ({
   fetchDashboardStatus: vi.fn(),
   clearEventData: vi.fn(),
   resetAllStoredData: vi.fn(),
+  deleteOldHistory: vi.fn(),
   fetchExchangeSymbols: vi.fn(),
-  fetchScoresTop: vi.fn(),
-  fetchScoresCurrent: vi.fn(),
-  fetchScoreMarketRegime: vi.fn(),
-  fetchScoreDetail: vi.fn(),
-  fetchScoreTimeline: vi.fn(),
-  fetchScoreEvidence: vi.fn(),
-  fetchScoringConfigCurrent: vi.fn(),
   fetchTopSpotFeedHistory: vi.fn(),
   fetchTopSpotHistory: vi.fn(),
   getEnvDashboardAuthToken: vi.fn(),
@@ -42,14 +36,8 @@ vi.mock('./api/sse', () => ({
   fetchDashboardStatus: apiMocks.fetchDashboardStatus,
   clearEventData: apiMocks.clearEventData,
   resetAllStoredData: apiMocks.resetAllStoredData,
+  deleteOldHistory: apiMocks.deleteOldHistory,
   fetchExchangeSymbols: apiMocks.fetchExchangeSymbols,
-  fetchScoresTop: apiMocks.fetchScoresTop,
-  fetchScoresCurrent: apiMocks.fetchScoresCurrent,
-  fetchScoreMarketRegime: apiMocks.fetchScoreMarketRegime,
-  fetchScoreDetail: apiMocks.fetchScoreDetail,
-  fetchScoreTimeline: apiMocks.fetchScoreTimeline,
-  fetchScoreEvidence: apiMocks.fetchScoreEvidence,
-  fetchScoringConfigCurrent: apiMocks.fetchScoringConfigCurrent,
   fetchTopSpotFeedHistory: apiMocks.fetchTopSpotFeedHistory,
   fetchTopSpotHistory: apiMocks.fetchTopSpotHistory,
   getEnvDashboardAuthToken: apiMocks.getEnvDashboardAuthToken
@@ -65,6 +53,7 @@ vi.mock('./components/StatusBar', () => ({
     onAdminTokenClear: () => void;
     onClearEventData: () => void;
     onResetAllStoredData: () => void;
+    onDeleteOldHistory: () => void;
   }) => (
     <div>
       <button type="button" onClick={props.onTogglePause}>toggle-pause</button>
@@ -74,6 +63,7 @@ vi.mock('./components/StatusBar', () => ({
         <>
           <button type="button" onClick={props.onClearEventData}>clear-events</button>
           <button type="button" onClick={props.onResetAllStoredData}>reset-all-data</button>
+          <button type="button" onClick={props.onDeleteOldHistory}>delete-old-history</button>
         </>
       ) : null}
       <span data-testid="queued-count">{props.queuedCount}</span>
@@ -99,8 +89,8 @@ describe('App', () => {
     apiMocks.fetchDashboardStatus.mockResolvedValue(makeStatus());
     apiMocks.clearEventData.mockResolvedValue(makeClearEventDataResponse());
     apiMocks.resetAllStoredData.mockResolvedValue(makeResetAllStoredDataResponse());
+    apiMocks.deleteOldHistory.mockResolvedValue(makeDeleteOldHistoryResponse());
     apiMocks.fetchExchangeSymbols.mockResolvedValue({ symbols: [] });
-    apiMocks.fetchScoringConfigCurrent.mockResolvedValue(makeScoringConfigResponse());
     apiMocks.fetchTopSpotFeedHistory.mockResolvedValue(makeTopSpotFeedHistoryResponse());
     apiMocks.fetchTopSpotHistory.mockResolvedValue(makeTopSpotHistoryResponse());
     apiMocks.getEnvDashboardAuthToken.mockReturnValue(null);
@@ -185,7 +175,7 @@ describe('App', () => {
     expect(apiMocks.clearEventData).toHaveBeenCalledWith(null, 'admin-secret');
   });
 
-  it('resets visible event and score state after the full reset action succeeds', async () => {
+  it('resets visible event state after the full reset action succeeds', async () => {
     const user = userEvent.setup();
     window.localStorage.setItem('cryptoattack.dashboardAdminToken', 'admin-secret');
     apiMocks.fetchDashboardSnapshot.mockResolvedValue(makeSnapshot({
@@ -205,16 +195,30 @@ describe('App', () => {
     expect(apiMocks.resetAllStoredData).toHaveBeenCalledWith(null, 'admin-secret');
   });
 
+  it('runs the seven-day history cleanup with the stored admin token', async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem('cryptoattack.dashboardAdminToken', 'admin-secret');
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByTestId('listings-count')).toHaveTextContent('0'));
+    await user.click(screen.getByRole('button', { name: 'delete-old-history' }));
+
+    await waitFor(() => expect(apiMocks.deleteOldHistory).toHaveBeenCalledWith(null, 'admin-secret'));
+  });
+
   it('keeps destructive header actions hidden until an admin token is saved locally', async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await waitFor(() => expect(screen.getByTestId('listings-count')).toHaveTextContent('0'));
     expect(screen.queryByRole('button', { name: 'clear-events' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'delete-old-history' })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'unlock-admin' }));
 
     expect(screen.getByRole('button', { name: 'clear-events' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'delete-old-history' })).toBeInTheDocument();
     expect(window.localStorage.getItem('cryptoattack.dashboardAdminToken')).toBe('admin-secret');
   });
 
@@ -238,6 +242,10 @@ describe('App', () => {
     const nav = screen.getByRole('navigation', { name: 'Dashboard pages' });
     const navButtons = within(nav).getAllByRole('button').map((button) => button.textContent);
     expect(navButtons.slice(0, 2)).toEqual(['History', 'Top Spot']);
+    expect(navButtons).not.toContain('Scores');
+    expect(navButtons).not.toContain('Funding');
+    expect(navButtons).not.toContain('News');
+    expect(navButtons).not.toContain('Debug');
 
     await user.click(within(nav).getByRole('button', { name: 'History' }));
 
@@ -251,26 +259,6 @@ describe('App', () => {
     expect(apiMocks.fetchTopSpotHistory).not.toHaveBeenCalled();
   });
 });
-
-function makeScoringConfigResponse() {
-  return {
-    generatedAt: '2026-01-01T00:00:00.000Z',
-    storageBacked: true,
-    config: {
-      scoreConfigVersion: 'rule-v1',
-      description: 'test config',
-      active: true,
-      activatedAt: null,
-      retiredAt: null,
-      windows: [5, 15, 60].map((minutes) => ({ minutes, halfLifeMinutes: minutes, maxAgeMinutes: minutes * 2 })),
-      sideSaturation: 100,
-      materialChange: {},
-      confidence: {},
-      burst: { threshold: 3, maxBonus: 8 },
-      rules: []
-    }
-  };
-}
 
 function makeTopSpotHistoryResponse() {
   return {
@@ -348,21 +336,6 @@ function makeClearEventDataResponseBase() {
         lastError: null,
         oldestQueuedAt: null,
         averageWriteMs: null
-      },
-      workers: {
-        priceCollection: makeWorkerStatus(),
-        forwardReturns: makeWorkerStatus(),
-        scores: {
-          ...makeWorkerStatus(),
-          scoreVersion: 'flow-v2',
-          windowsMinutes: [5, 15, 60],
-          queueDepth: 0,
-          pendingCoinCount: 0,
-          lastTriggeredAt: null,
-          lastTriggerReason: null,
-          writtenEvidence: 0,
-          latestScoreTs: null
-        }
       }
     }
   };
@@ -386,37 +359,37 @@ function makeResetAllStoredDataResponseBase() {
       missing: false,
       bytesBefore: 2048,
       reason: null
-    },
-    runtime: {
-      clearedPendingScoreCoins: 0,
-      clearedActivePriceCoins: 0
-    },
-    scoreSnapshot: {
-      generatedAt: '2026-01-01T00:00:00.000Z',
-      scoreVersion: 'flow-v2',
-      asOf: null,
-      windowsMinutes: [5, 15, 60],
-      scores: [],
-      health: base.storageStatus.workers.scores
     }
   };
 }
 
-function makeWorkerStatus() {
+function makeDeleteOldHistoryResponse() {
+  const base = makeClearEventDataResponseBase();
   return {
-    enabled: false,
-    state: 'disabled' as const,
-    running: false,
-    intervalMs: 60_000,
-    lastRunStartedAt: null,
-    lastRunCompletedAt: null,
-    lastSuccessAt: null,
-    lastFailureAt: null,
-    lastError: null,
-    processed: 0,
-    written: 0,
-    skipped: 0,
-    failed: 0,
-    averageRunMs: null
+    generatedAt: base.generatedAt,
+    prunedAt: base.clearedAt,
+    retentionDays: 7,
+    cutoff: '2025-12-25T00:00:00.000Z',
+    database: {
+      prunedAt: base.clearedAt,
+      cutoff: '2025-12-25T00:00:00.000Z',
+      retentionDays: 7,
+      rowsDeleted: 42,
+      tables: [{ table: 'raw_events', rowsDeleted: 12 }]
+    },
+    rawLog: {
+      path: '/tmp/raw-events.ndjson',
+      enabled: true,
+      missing: false,
+      bytesBefore: 2048,
+      bytesAfter: 1024,
+      linesBefore: 10,
+      linesAfter: 5,
+      deletedLines: 5,
+      invalidLinesKept: 0,
+      reason: null
+    },
+    status: base.status,
+    storageStatus: base.storageStatus
   };
 }

@@ -11,13 +11,12 @@ import {
   type ExchangeFilter,
   type MarketFilter
 } from '../exchangeFilters';
-import type { ApiStatus, LatencyStats, StreamState } from '../types';
-import { formatLatency, formatTime } from './format';
+import type { ApiStatus, StreamState } from '../types';
+import { formatTime } from './format';
 
 interface StatusBarProps {
   status: ApiStatus | null;
   lastEventTime: string | null;
-  latency: LatencyStats;
   streamState: StreamState;
   paused: boolean;
   queuedCount: number;
@@ -31,6 +30,8 @@ interface StatusBarProps {
   eventClearMessage: string | null;
   dataResetState: 'idle' | 'resetting' | 'success' | 'error';
   dataResetMessage: string | null;
+  historyPruneState: 'idle' | 'pruning' | 'success' | 'error';
+  historyPruneMessage: string | null;
   adminUnlocked: boolean;
   onTogglePause: () => void;
   onToggleSound: () => void;
@@ -43,6 +44,7 @@ interface StatusBarProps {
   onAdminTokenClear: () => void;
   onClearEventData: () => void;
   onResetAllStoredData: () => void;
+  onDeleteOldHistory: () => void;
 }
 
 export function StatusBar(props: StatusBarProps) {
@@ -50,10 +52,12 @@ export function StatusBar(props: StatusBarProps) {
   const [adminMenuOpen, setAdminMenuOpen] = useState(false);
   const [adminTokenInput, setAdminTokenInput] = useState('');
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+  const [historyPruneConfirmOpen, setHistoryPruneConfirmOpen] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const classificationMenuRef = useRef<HTMLDivElement | null>(null);
   const adminMenuRef = useRef<HTMLDivElement | null>(null);
   const clearConfirmRef = useRef<HTMLDivElement | null>(null);
+  const historyPruneConfirmRef = useRef<HTMLDivElement | null>(null);
   const resetConfirmRef = useRef<HTMLDivElement | null>(null);
   const main = props.status?.sockets.main;
   const fast = props.status?.sockets.fast;
@@ -110,6 +114,19 @@ export function StatusBar(props: StatusBarProps) {
     return () => document.removeEventListener('pointerdown', closeOnOutsidePointerDown);
   }, [resetConfirmOpen]);
 
+  useEffect(() => {
+    if (!historyPruneConfirmOpen) return;
+
+    const closeOnOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && historyPruneConfirmRef.current?.contains(target)) return;
+      setHistoryPruneConfirmOpen(false);
+    };
+
+    document.addEventListener('pointerdown', closeOnOutsidePointerDown);
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointerDown);
+  }, [historyPruneConfirmOpen]);
+
   return (
     <header className="status-bar sticky top-0 z-20 px-4 py-2 md:px-6">
       <div className="mx-auto max-w-[1800px]">
@@ -118,9 +135,7 @@ export function StatusBar(props: StatusBarProps) {
           <StatusPill label={formatSocketStatus('Main', main)} tone={socketTone(main)} />
           <StatusPill label={formatSocketStatus('Fast', fast)} tone={socketTone(fast)} />
           <StatusPill label={`Last event: ${formatTime(props.lastEventTime)}`} tone="neutral" />
-          <StatusPill label={`Latency: ${formatLatency(props.latency.latestMs ?? props.latency.averageMs)}`} tone="neutral" />
           {props.status?.mockMode ? <StatusPill label="Mock mode" tone="warn" /> : null}
-          {props.status?.authEnabled ? <StatusPill label="Auth on" tone="ok" /> : <StatusPill label="Auth off" tone="neutral" />}
           {props.status ? <StatusPill label={formatStorageHealth(props.status)} tone={storageHealthTone(props.status)} /> : null}
           <StatusPill label={props.paused ? `Display: paused (${props.queuedCount})` : 'Display: live'} tone={props.paused ? 'warn' : 'ok'} />
 
@@ -206,7 +221,7 @@ export function StatusBar(props: StatusBarProps) {
             {clearConfirmOpen ? (
               <div className="event-clear-confirm" role="dialog" aria-label="Confirm clear event data">
                 <strong>Clear event data?</strong>
-                <span>Live buffers and stored event tables will be cleared. Score tables are not deleted.</span>
+                <span>Live buffers and stored event tables will be cleared.</span>
                 <div className="event-clear-actions">
                   <button className="control-button" type="button" onClick={() => setClearConfirmOpen(false)}>
                     Cancel
@@ -232,6 +247,46 @@ export function StatusBar(props: StatusBarProps) {
             </span>
           ) : null}
           {props.adminUnlocked ? (
+            <div className="event-clear-control" ref={historyPruneConfirmRef}>
+              <button
+                className={`control-button ${props.historyPruneState === 'error' ? 'danger' : ''}`}
+                type="button"
+                disabled={props.historyPruneState === 'pruning'}
+                aria-haspopup="dialog"
+                aria-expanded={historyPruneConfirmOpen}
+                onClick={() => setHistoryPruneConfirmOpen((value) => !value)}
+              >
+                {props.historyPruneState === 'pruning' ? 'Deleting old history' : 'Delete >7d history'}
+              </button>
+              {historyPruneConfirmOpen ? (
+                <div className="event-clear-confirm old-history-confirm" role="dialog" aria-label="Confirm delete old history">
+                  <strong>Delete history older than 7 days?</strong>
+                  <span>Deletes database history and raw log lines older than 7 days. Recent data is kept.</span>
+                  <div className="event-clear-actions">
+                    <button className="control-button" type="button" onClick={() => setHistoryPruneConfirmOpen(false)}>
+                      Cancel
+                    </button>
+                    <button
+                      className="control-button danger"
+                      type="button"
+                      onClick={() => {
+                        setHistoryPruneConfirmOpen(false);
+                        props.onDeleteOldHistory();
+                      }}
+                    >
+                      Delete old history
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {props.historyPruneMessage ? (
+            <span className={`event-clear-message ${props.historyPruneState === 'pruning' ? 'idle' : props.historyPruneState}`} aria-live="polite">
+              {props.historyPruneMessage}
+            </span>
+          ) : null}
+          {props.adminUnlocked ? (
             <div className="event-clear-control" ref={resetConfirmRef}>
             <button
               className="control-button danger"
@@ -246,7 +301,7 @@ export function StatusBar(props: StatusBarProps) {
             {resetConfirmOpen ? (
               <div className="event-clear-confirm reset-data-confirm" role="dialog" aria-label="Confirm reset all stored data">
                 <strong>Reset all stored data?</strong>
-                <span>Deletes events, scores, popup evidence, market labels, and the raw event log. Fresh websocket data will start filling again.</span>
+                <span>Deletes events, event history, and the raw event log. Fresh websocket data will start filling again.</span>
                 <div className="event-clear-actions">
                   <button className="control-button" type="button" onClick={() => setResetConfirmOpen(false)}>
                     Cancel

@@ -1,4 +1,4 @@
-import type { AmountsFeedHistoryResponse, AmountsHistoryResponse, ApiStatus, ClearEventDataResponse, DashboardSnapshot, ExchangeKey, ExchangeSymbolsQuery, ExchangeSymbolsRefreshResult, ExchangeSymbolsResponse, NormalizedEvent, ResetAllStoredDataResponse, ScoreDetailResponse, ScoreEvidenceResponse, ScoreListQuery, ScoreMarketRegimeResponse, ScoreSnapshotSseEvent, ScoreTimelineResponse, ScoreUpdateSseEvent, ScoresListResponse, ScoringConfigCurrentResponse, SpotPerformanceResponse, StorageStatusResponse, StreamState, TopOiFeedHistoryResponse, TopOiHistoryResponse, TopOiHistorySide, TopSpotFeedHistoryResponse, TopSpotHistoryMarket, TopSpotHistoryResponse, TopSpotHistorySide } from '../types';
+import type { AmountsFeedHistoryResponse, AmountsHistoryResponse, ApiStatus, ClearEventDataResponse, DashboardSnapshot, DeleteOldHistoryResponse, ExchangeKey, ExchangeSymbolsQuery, ExchangeSymbolsRefreshResult, ExchangeSymbolsResponse, NormalizedEvent, ResetAllStoredDataResponse, SpotPerformanceResponse, StorageStatusResponse, StreamState, TopOiFeedHistoryResponse, TopOiHistoryResponse, TopOiHistorySide, TopSpotFeedHistoryResponse, TopSpotHistoryMarket, TopSpotHistoryResponse, TopSpotHistorySide } from '../types';
 
 interface StreamHandlers {
   token: string | null;
@@ -6,8 +6,6 @@ interface StreamHandlers {
   onEvent: (event: NormalizedEvent) => void;
   onStatus: (status: ApiStatus) => void;
   onSpotPerformance?: (response: SpotPerformanceResponse) => void;
-  onScoreUpdate?: (event: ScoreUpdateSseEvent) => void;
-  onScoreSnapshot?: (event: ScoreSnapshotSseEvent) => void;
   onStorageStatus?: (status: StorageStatusResponse) => void;
   onStateChange: (state: StreamState) => void;
 }
@@ -36,14 +34,6 @@ export function connectDashboardStream(handlers: StreamHandlers): EventSource {
 
   source.addEventListener('spot-performance', (message) => {
     handlers.onSpotPerformance?.(JSON.parse(message.data) as SpotPerformanceResponse);
-  });
-
-  source.addEventListener('score-update', (message) => {
-    handlers.onScoreUpdate?.(JSON.parse(message.data) as ScoreUpdateSseEvent);
-  });
-
-  source.addEventListener('score-snapshot', (message) => {
-    handlers.onScoreSnapshot?.(JSON.parse(message.data) as ScoreSnapshotSseEvent);
   });
 
   source.addEventListener('storage-status', (message) => {
@@ -75,6 +65,13 @@ export async function resetAllStoredData(token: string | null, adminToken: strin
   });
 }
 
+export async function deleteOldHistory(token: string | null, adminToken: string | null, signal?: AbortSignal): Promise<DeleteOldHistoryResponse> {
+  return fetchJson<DeleteOldHistoryResponse>('/api/storage/history/older-than-7-days', token, signal, {
+    method: 'DELETE',
+    headers: adminHeaders(adminToken)
+  });
+}
+
 export async function fetchExchangeSymbols(token: string | null, query: ExchangeSymbolsQuery, signal?: AbortSignal): Promise<ExchangeSymbolsResponse> {
   const params = new URLSearchParams();
   if (query.exchange) params.set('exchange', query.exchange);
@@ -98,37 +95,6 @@ export async function fetchSpotPerformance(token: string | null, query: { exchan
   if (query.limit) params.set('limit', String(query.limit));
   const suffix = params.size ? `?${params.toString()}` : '';
   return fetchJson<SpotPerformanceResponse>(`/api/spot-performance${suffix}`, token, signal);
-}
-
-export async function fetchScoresTop(token: string | null, query: ScoreListQuery, signal?: AbortSignal): Promise<ScoresListResponse> {
-  return fetchJson<ScoresListResponse>(`/api/scores/top${scoreQuerySuffix(query)}`, token, signal);
-}
-
-export async function fetchScoresCurrent(token: string | null, query: ScoreListQuery, signal?: AbortSignal): Promise<ScoresListResponse> {
-  return fetchJson<ScoresListResponse>(`/api/scores/current${scoreQuerySuffix(query)}`, token, signal);
-}
-
-export async function fetchScoreDetail(token: string | null, coin: string, query: ScoreListQuery, signal?: AbortSignal): Promise<ScoreDetailResponse> {
-  return fetchJson<ScoreDetailResponse>(`/api/scores/${encodeURIComponent(coin)}${scoreQuerySuffix(query)}`, token, signal);
-}
-
-export async function fetchScoreTimeline(token: string | null, coin: string, query: ScoreListQuery, signal?: AbortSignal): Promise<ScoreTimelineResponse> {
-  return fetchJson<ScoreTimelineResponse>(`/api/scores/${encodeURIComponent(coin)}/timeline${scoreQuerySuffix(query)}`, token, signal);
-}
-
-export async function fetchScoreEvidence(token: string | null, coin: string, query: ScoreListQuery, signal?: AbortSignal): Promise<ScoreEvidenceResponse> {
-  return fetchJson<ScoreEvidenceResponse>(`/api/scores/${encodeURIComponent(coin)}/evidence${scoreQuerySuffix(query)}`, token, signal);
-}
-
-export async function fetchScoreMarketRegime(token: string | null, query: ScoreListQuery, signal?: AbortSignal): Promise<ScoreMarketRegimeResponse> {
-  return fetchJson<ScoreMarketRegimeResponse>(`/api/scores/market-regime${scoreQuerySuffix(query)}`, token, signal);
-}
-
-export async function fetchScoringConfigCurrent(token: string | null, query: { includeRules?: boolean } = {}, signal?: AbortSignal): Promise<ScoringConfigCurrentResponse> {
-  const params = new URLSearchParams();
-  if (query.includeRules !== undefined) params.set('includeRules', String(query.includeRules));
-  const suffix = params.size ? `?${params.toString()}` : '';
-  return fetchJson<ScoringConfigCurrentResponse>(`/api/scoring/config/current${suffix}`, token, signal);
 }
 
 export async function fetchTopSpotFeedHistory(token: string | null, query: { from: string; to: string }, signal?: AbortSignal): Promise<TopSpotFeedHistoryResponse> {
@@ -190,20 +156,6 @@ function getApiBaseUrl(): string {
 
 function buildApiUrl(path: string): URL {
   return new URL(path, getApiBaseUrl());
-}
-
-function scoreQuerySuffix(query: ScoreListQuery): string {
-  const params = new URLSearchParams();
-  if (query.side) params.set('side', query.side);
-  if (query.limit !== undefined) params.set('limit', String(query.limit));
-  if (query.minConfidence !== undefined) params.set('minConfidence', String(query.minConfidence));
-  if (query.halal !== undefined && query.halal !== null) params.set('halal', String(query.halal));
-  if (query.exchange) params.set('exchange', query.exchange);
-  if (query.market) params.set('market', query.market);
-  if (query.updatedSince) params.set('updatedSince', query.updatedSince);
-  if (query.windowMinutes !== undefined) params.set('windowMinutes', String(query.windowMinutes));
-  if (query.scoreConfigVersion) params.set('scoreConfigVersion', query.scoreConfigVersion);
-  return params.size ? `?${params.toString()}` : '';
 }
 
 async function fetchJson<T>(path: string, token: string | null, signal?: AbortSignal, init: RequestInit = {}): Promise<T> {

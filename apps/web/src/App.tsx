@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { clearEventData, connectDashboardStream, fetchDashboardSnapshot, fetchDashboardStatus, fetchExchangeSymbols, getEnvDashboardAuthToken, resetAllStoredData } from './api/sse';
+import { clearEventData, connectDashboardStream, deleteOldHistory, fetchDashboardSnapshot, fetchDashboardStatus, fetchExchangeSymbols, getEnvDashboardAuthToken, resetAllStoredData } from './api/sse';
 import type { CoinClassificationFilter } from './coinClassification';
 import { AmountsPage } from './components/AmountsPage';
 import { BigActivitiesPage } from './components/BigActivitiesPage';
@@ -16,18 +16,16 @@ import { OnchainAlphaPage } from './components/OnchainAlphaPage';
 import { PerformancePage } from './components/PerformancePage';
 import { PlaceholderPage } from './components/PlaceholderPage';
 import { OpenInterestAlertsPage } from './components/OpenInterestAlertsPage';
-import { ScoresPage } from './components/ScoresPage';
 import { SignalsPage } from './components/SignalsPage';
 import { StatusBar } from './components/StatusBar';
 import { isExchangeFilterActive, isMarketFilterActive, marketFilterAllows, matchesExchangeFilterByCoin, matchesExchangeFilterByExchange, type ExchangeFilter, type MarketFilter } from './exchangeFilters';
-import { feedKeys, type ApiStatus, type DashboardSnapshot, type ExchangeKey, type FeedKey, type NormalizedEvent, type ScoreSnapshotSseEvent, type ScoreUpdateSseEvent, type SpotPerformanceResponse, type StorageStatusResponse, type StreamState } from './types';
+import { feedKeys, type ApiStatus, type DashboardSnapshot, type DeleteOldHistoryResponse, type ExchangeKey, type FeedKey, type NormalizedEvent, type SpotPerformanceResponse, type StorageStatusResponse, type StreamState } from './types';
 
 const alertFeedKeys = new Set<FeedKey>(['listings', 'delistings']);
 type ThemeMode = 'dark' | 'light';
 type DashboardPage =
   | 'bull'
   | 'bear'
-  | 'scores'
   | 'amounts-bull'
   | 'amounts-sell'
   | 'price-alerts'
@@ -47,11 +45,10 @@ type DashboardPage =
 
 type NavigableDashboardPage = DashboardPage;
 
-const pageNavItems: Array<{ page: NavigableDashboardPage; label: string; path: string }> = [
+const pageNavItems: Array<{ page: NavigableDashboardPage; label: string; path: string; showInHeader?: boolean }> = [
   { page: 'history', label: 'History', path: '/history' },
   { page: 'bull', label: 'Top Spot', path: '/bull' },
   { page: 'bear', label: 'OI and Listings', path: '/bear' },
-  { page: 'scores', label: 'Scores', path: '/scores' },
   { page: 'amounts-bull', label: 'Bull %', path: '/amounts-bull' },
   { page: 'amounts-sell', label: 'Bear %', path: '/amounts-sell' },
   { page: 'price-alerts', label: 'Price Alerts', path: '/price-alerts' },
@@ -60,13 +57,13 @@ const pageNavItems: Array<{ page: NavigableDashboardPage; label: string; path: s
   { page: 'big-selling', label: 'Big Selling', path: '/big-selling' },
   { page: 'big-activities', label: 'Big activities', path: '/big-activities' },
   { page: 'oi-alerts', label: 'OI Alerts', path: '/oi-alerts' },
-  { page: 'market-data', label: 'Funding', path: '/funding' },
+  { page: 'market-data', label: 'Funding', path: '/funding', showInHeader: false },
   { page: 'flows', label: 'Flows', path: '/flows' },
   { page: 'onchain-alpha', label: 'On chain/alpha', path: '/onchain-alpha' },
-  { page: 'news', label: 'News', path: '/news' },
+  { page: 'news', label: 'News', path: '/news', showInHeader: false },
   { page: 'coins', label: 'Coins', path: '/coins' },
   { page: 'performance', label: 'Performance', path: '/performance' },
-  { page: 'debug', label: 'Debug', path: '/debug' }
+  { page: 'debug', label: 'Debug', path: '/debug', showInHeader: false }
 ];
 
 const pagePathByKey = Object.fromEntries(pageNavItems.map((item) => [item.page, item.path])) as Record<NavigableDashboardPage, string>;
@@ -91,13 +88,13 @@ export default function App() {
   const [exchangeFilter, setExchangeFilter] = useState<ExchangeFilter>([]);
   const [marketFilter, setMarketFilter] = useState<MarketFilter>([]);
   const [spotPerformanceByExchange, setSpotPerformanceByExchange] = useState<Partial<Record<ExchangeKey, SpotPerformanceResponse>>>({});
-  const [liveScoreUpdate, setLiveScoreUpdate] = useState<ScoreUpdateSseEvent | null>(null);
-  const [liveScoreSnapshot, setLiveScoreSnapshot] = useState<ScoreSnapshotSseEvent | null>(null);
   const [storageStatus, setStorageStatus] = useState<StorageStatusResponse | null>(null);
   const [eventClearState, setEventClearState] = useState<'idle' | 'clearing' | 'success' | 'error'>('idle');
   const [eventClearMessage, setEventClearMessage] = useState<string | null>(null);
   const [dataResetState, setDataResetState] = useState<'idle' | 'resetting' | 'success' | 'error'>('idle');
   const [dataResetMessage, setDataResetMessage] = useState<string | null>(null);
+  const [historyPruneState, setHistoryPruneState] = useState<'idle' | 'pruning' | 'success' | 'error'>('idle');
+  const [historyPruneMessage, setHistoryPruneMessage] = useState<string | null>(null);
 
   const pausedRef = useRef(paused);
   const queuedEventsRef = useRef<NormalizedEvent[]>([]);
@@ -171,14 +168,9 @@ export default function App() {
           [performance.exchange]: performance
         }));
       },
-      onScoreUpdate: (event) => setLiveScoreUpdate(event),
-      onScoreSnapshot: (event) => {
-        setLiveScoreSnapshot(event);
-        setStatus((current) => current?.workers ? { ...current, workers: { ...current.workers, scores: event.health } } : current);
-      },
       onStorageStatus: (event) => {
         setStorageStatus(event);
-        setStatus((current) => current ? { ...current, storage: event.storage, workers: event.workers } : current);
+        setStatus((current) => current ? { ...current, storage: event.storage } : current);
       },
       onStateChange: (nextState) => setStreamState(nextState),
       onEvent: (event) => {
@@ -288,8 +280,6 @@ export default function App() {
       setSnapshot(response.snapshot);
       setStatus(response.status);
       setStorageStatus(response.storageStatus);
-      setLiveScoreUpdate(null);
-      setLiveScoreSnapshot(response.scoreSnapshot);
       setApiError(null);
       setDataResetState('success');
       setDataResetMessage(formatResetAllDataMessage(response.database?.tables.length ?? 0, response.rawLog.bytesBefore));
@@ -297,6 +287,29 @@ export default function App() {
       const message = error instanceof Error ? error.message : String(error);
       setDataResetState('error');
       setDataResetMessage(message);
+      setApiError(message);
+    }
+  };
+
+  const handleDeleteOldHistory = async () => {
+    if (!adminToken) {
+      setHistoryPruneState('error');
+      setHistoryPruneMessage('Admin token required');
+      return;
+    }
+    setHistoryPruneState('pruning');
+    setHistoryPruneMessage(null);
+    try {
+      const response = await deleteOldHistory(authToken, adminToken);
+      setStatus(response.status);
+      setStorageStatus(response.storageStatus);
+      setApiError(null);
+      setHistoryPruneState('success');
+      setHistoryPruneMessage(formatDeleteOldHistoryMessage(response));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setHistoryPruneState('error');
+      setHistoryPruneMessage(message);
       setApiError(message);
     }
   };
@@ -319,6 +332,7 @@ export default function App() {
     setAdminToken(trimmed);
     setEventClearMessage(null);
     setDataResetMessage(null);
+    setHistoryPruneMessage(null);
   };
 
   const clearAdminToken = () => {
@@ -331,7 +345,6 @@ export default function App() {
       <StatusBar
         status={status}
         lastEventTime={snapshot.lastEventTime}
-        latency={snapshot.latency}
         streamState={streamState}
         paused={paused}
         queuedCount={queuedCount}
@@ -345,6 +358,8 @@ export default function App() {
         eventClearMessage={eventClearMessage}
         dataResetState={dataResetState}
         dataResetMessage={dataResetMessage}
+        historyPruneState={historyPruneState}
+        historyPruneMessage={historyPruneMessage}
         adminUnlocked={Boolean(adminToken)}
         onTogglePause={togglePause}
         onToggleSound={() => setSoundEnabled((value) => !value)}
@@ -357,6 +372,7 @@ export default function App() {
         onAdminTokenClear={clearAdminToken}
         onClearEventData={() => void handleClearEventData()}
         onResetAllStoredData={() => void handleResetAllStoredData()}
+        onDeleteOldHistory={() => void handleDeleteOldHistory()}
       />
       {apiError ? (
         <div className="mx-auto mt-3 max-w-[1800px] px-4 md:px-6">
@@ -377,19 +393,6 @@ export default function App() {
         />
       ) : page === 'coins' ? (
         <ExchangeCoinsPage authToken={authToken} classificationFilter={classificationFilter} exchangeFilter={exchangeFilter} marketFilter={[]} />
-      ) : page === 'scores' ? (
-        <ScoresPage
-          authToken={authToken}
-          classificationFilter={classificationFilter}
-          exchangeFilter={exchangeFilter}
-          marketFilter={marketFilter}
-          exchangeAvailability={exchangeAvailability}
-          snapshot={visibleSnapshot}
-          status={status}
-          liveScoreUpdate={liveScoreUpdate}
-          liveScoreSnapshot={liveScoreSnapshot}
-          storageStatus={storageStatus}
-        />
       ) : page === 'performance' ? (
         <PerformancePage authToken={authToken} classificationFilter={classificationFilter} exchangeFilter={exchangeFilter} marketFilter={[]} livePerformanceByExchange={spotPerformanceByExchange} />
       ) : page === 'price-alerts' ? (
@@ -445,6 +448,15 @@ function buildPerformanceTrends(performanceByExchange: Partial<Record<ExchangeKe
 function formatResetAllDataMessage(tableCount: number, rawLogBytesBefore: number | null): string {
   const rawLogPart = rawLogBytesBefore && rawLogBytesBefore > 0 ? `, raw log ${formatBytes(rawLogBytesBefore)}` : '';
   return `Reset ${tableCount} tables${rawLogPart}`;
+}
+
+function formatDeleteOldHistoryMessage(response: DeleteOldHistoryResponse): string {
+  const rowsDeleted = response.database?.rowsDeleted ?? 0;
+  const rawLogBytesDeleted = response.rawLog.bytesBefore !== null && response.rawLog.bytesAfter !== null
+    ? Math.max(0, response.rawLog.bytesBefore - response.rawLog.bytesAfter)
+    : 0;
+  const rawLogPart = rawLogBytesDeleted > 0 ? `, raw log ${formatBytes(rawLogBytesDeleted)}` : '';
+  return `Deleted ${rowsDeleted.toLocaleString()} old rows${rawLogPart}`;
 }
 
 function formatBytes(value: number): string {
@@ -551,7 +563,7 @@ function addPerformanceTrend(trends: Map<string, Set<'gainer' | 'loser'>>, coin:
 function PageSwitcher({ page, onNavigate }: { page: DashboardPage; onNavigate: (page: NavigableDashboardPage) => void }) {
   return (
     <nav className="page-switcher" aria-label="Dashboard pages">
-      {pageNavItems.map((item) => (
+      {pageNavItems.filter((item) => item.showInHeader !== false).map((item) => (
         <button
           aria-current={page === item.page ? 'page' : undefined}
           className={page === item.page ? `active ${item.page}` : item.page}

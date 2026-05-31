@@ -5,7 +5,7 @@ import type { AppConfig } from '../config.js';
 export type TimescalePolicyAction = 'applied' | 'skipped';
 
 export interface TimescalePolicyResult {
-  table: 'raw_events' | 'price_ticks' | 'score_snapshots';
+  table: 'raw_events';
   policy: 'retention' | 'compression';
   afterDays: number;
   action: TimescalePolicyAction;
@@ -28,7 +28,7 @@ interface HypertableRow extends QueryResultRow {
   hypertable_name: string;
 }
 
-const policyTables = ['raw_events', 'price_ticks', 'score_snapshots'] as const;
+const policyTables = ['raw_events'] as const;
 
 export async function applyTimescalePolicies(pool: TimescalePolicyPool, config: AppConfig['database']['timescale']): Promise<TimescalePolicyApplyResult> {
   const hasTimescale = await pool.query<ExtensionRow>(`select exists (select 1 from pg_extension where extname = 'timescaledb') as exists`);

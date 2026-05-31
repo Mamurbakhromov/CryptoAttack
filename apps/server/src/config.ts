@@ -23,13 +23,6 @@ const jsonRecordFromEnv = z.preprocess((value) => {
   }
 }, z.record(z.string(), z.record(z.string(), z.unknown())));
 
-const integerListFromEnv = z.preprocess((value) => {
-  if (value === undefined || value === '') return undefined;
-  if (Array.isArray(value)) return value;
-  if (typeof value !== 'string') return value;
-  return value.split(',').map((item) => Number(item.trim())).filter((item) => Number.isFinite(item));
-}, z.array(z.number().int().positive()).min(1));
-
 const EnvSchema = z.object({
   NODE_ENV: z.string().default('development'),
   CRYPTOATTACK_API_KEY: z.string().default(''),
@@ -70,20 +63,7 @@ const EnvSchema = z.object({
   DATABASE_WRITE_RETRY_MAX_MS: integerFromEnv.default(5_000),
   DATABASE_WRITE_DRAIN_TIMEOUT_MS: integerFromEnv.default(10_000),
   RAW_EVENTS_RETENTION_DAYS: integerFromEnv.default(30),
-  PRICE_TICKS_RETENTION_DAYS: integerFromEnv.default(180),
-  SCORE_SNAPSHOTS_RETENTION_DAYS: integerFromEnv.default(365),
-  TIMESCALE_COMPRESSION_ENABLED: booleanFromEnv.default(false),
-  PRICE_COLLECTION_ENABLED: booleanFromEnv.default(false),
-  PRICE_COLLECTION_INTERVAL_MS: integerFromEnv.default(60_000),
-  PRICE_COLLECTION_ACTIVE_COIN_TTL_MS: integerFromEnv.default(86_400_000),
-  FORWARD_RETURN_HORIZONS_MINUTES: integerListFromEnv.default([5, 15, 60, 240, 1_440]),
-  SCORES_ENABLED: booleanFromEnv.default(false),
-  SCORES_VERSION: z.string().trim().min(1).default('flow-v2'),
-  SCORES_RECALC_INTERVAL_MS: integerFromEnv.default(30_000),
-  SCORES_RECOMPUTE_DEBOUNCE_MS: integerFromEnv.default(1_000),
-  SCORES_WINDOWS_MINUTES: integerListFromEnv.default([5, 15, 60, 240, 1_440]),
-  SCORES_BATCH_COINS: integerFromEnv.default(100),
-  SCORES_MAX_QUEUE_DEPTH: integerFromEnv.default(10_000)
+  TIMESCALE_COMPRESSION_ENABLED: booleanFromEnv.default(false)
 });
 
 export type AppConfig = ReturnType<typeof loadConfig>;
@@ -108,13 +88,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     throw new Error('DATABASE_STORAGE_ENABLED=true is required when DATABASE_REQUIRED_ON_START=true');
   }
 
-  if (parsed.SCORES_ENABLED && !parsed.DATABASE_STORAGE_ENABLED) {
-    throw new Error('DATABASE_STORAGE_ENABLED=true is required when SCORES_ENABLED=true');
-  }
-
   assertRetentionWindow('RAW_EVENTS_RETENTION_DAYS', parsed.RAW_EVENTS_RETENTION_DAYS, compressionAfterDays(parsed.RAW_EVENTS_RETENTION_DAYS, 2));
-  assertRetentionWindow('PRICE_TICKS_RETENTION_DAYS', parsed.PRICE_TICKS_RETENTION_DAYS, compressionAfterDays(parsed.PRICE_TICKS_RETENTION_DAYS, 7));
-  assertRetentionWindow('SCORE_SNAPSHOTS_RETENTION_DAYS', parsed.SCORE_SNAPSHOTS_RETENTION_DAYS, compressionAfterDays(parsed.SCORE_SNAPSHOTS_RETENTION_DAYS, 14));
 
   return {
     cryptoAttackApiKey: parsed.CRYPTOATTACK_API_KEY,
@@ -162,34 +136,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
             timeColumn: 'received_at',
             retentionDays: parsed.RAW_EVENTS_RETENTION_DAYS,
             compressionAfterDays: compressionAfterDays(parsed.RAW_EVENTS_RETENTION_DAYS, 2)
-          },
-          price_ticks: {
-            timeColumn: 'ts',
-            retentionDays: parsed.PRICE_TICKS_RETENTION_DAYS,
-            compressionAfterDays: compressionAfterDays(parsed.PRICE_TICKS_RETENTION_DAYS, 7)
-          },
-          score_snapshots: {
-            timeColumn: 'ts',
-            retentionDays: parsed.SCORE_SNAPSHOTS_RETENTION_DAYS,
-            compressionAfterDays: compressionAfterDays(parsed.SCORE_SNAPSHOTS_RETENTION_DAYS, 14)
           }
         }
       }
-    },
-    priceCollection: {
-      enabled: parsed.PRICE_COLLECTION_ENABLED,
-      intervalMs: parsed.PRICE_COLLECTION_INTERVAL_MS,
-      activeCoinTtlMs: parsed.PRICE_COLLECTION_ACTIVE_COIN_TTL_MS,
-      forwardReturnHorizonsMinutes: [...new Set(parsed.FORWARD_RETURN_HORIZONS_MINUTES)].sort((a, b) => a - b)
-    },
-    scores: {
-      enabled: parsed.SCORES_ENABLED,
-      version: parsed.SCORES_VERSION,
-      recalculationIntervalMs: parsed.SCORES_RECALC_INTERVAL_MS,
-      recomputeDebounceMs: parsed.SCORES_RECOMPUTE_DEBOUNCE_MS,
-      windowsMinutes: [...new Set(parsed.SCORES_WINDOWS_MINUTES)].sort((a, b) => a - b),
-      batchCoins: parsed.SCORES_BATCH_COINS,
-      maxQueueDepth: parsed.SCORES_MAX_QUEUE_DEPTH
     }
   };
 }
