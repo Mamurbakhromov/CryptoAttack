@@ -35,7 +35,7 @@ pnpm install
 cp .env.example .env
 ```
 
-Use Node.js 20 or newer.
+Use Node.js 24 or newer.
 
 ## Environment Variables
 
@@ -60,9 +60,12 @@ Optional dashboard auth:
 ```bash
 DASHBOARD_AUTH_ENABLED=true
 DASHBOARD_AUTH_TOKEN=replace-with-a-dashboard-token
+DASHBOARD_ADMIN_TOKEN=replace-with-a-separate-admin-token
 ```
 
 When auth is enabled, pass the token as `?token=...` in the dashboard URL or set `VITE_DASHBOARD_AUTH_TOKEN` for local frontend development.
+
+The admin token is separate from the dashboard token and is required for destructive storage reset routes.
 
 Do not ship `VITE_DASHBOARD_AUTH_TOKEN` in production builds: Vite embeds it in browser JavaScript. Prefer same-origin backend serving with `DASHBOARD_AUTH_ENABLED=true`, a long random `DASHBOARD_AUTH_TOKEN`, HTTPS at the reverse proxy, and server-side token handling where possible.
 
@@ -83,6 +86,7 @@ DATABASE_STORAGE_ENABLED=false
 DATABASE_URL=postgres://cryptoattack:cryptoattack@127.0.0.1:5432/cryptoattack
 DATABASE_SSL=false
 DATABASE_POOL_MAX=10
+DATABASE_REQUIRED_ON_START=false
 DATABASE_MIGRATIONS_ON_START=false
 DATABASE_STATEMENT_TIMEOUT_MS=5000
 DATABASE_WRITE_QUEUE_MAX=10000
@@ -107,7 +111,7 @@ SCORES_BATCH_COINS=100
 SCORES_MAX_QUEUE_DEPTH=10000
 ```
 
-Storage is disabled by default, so tests, mock mode, and live SSE continue to run without Postgres. When `DATABASE_STORAGE_ENABLED=true`, `DATABASE_URL` must be a valid `postgres://` or `postgresql://` URL or the server fails before startup without printing the URL.
+Storage is disabled by default, so tests, mock mode, and live SSE continue to run without Postgres. When `DATABASE_STORAGE_ENABLED=true`, `DATABASE_URL` must be a valid `postgres://` or `postgresql://` URL or the server fails before startup without printing the URL. In production, set `DATABASE_REQUIRED_ON_START=true` so storage and scoring cannot launch with Postgres unavailable.
 
 The Docker Compose Postgres credentials in `.env.example` are local-only conveniences. Change `POSTGRES_PASSWORD`, `DATABASE_URL`, and all dashboard/API tokens before exposing any service beyond localhost.
 
@@ -265,7 +269,7 @@ docker compose up -d postgres
 pm2 start cryptoattack-dashboard
 ```
 
-Treat database dumps, Docker volume backups, raw NDJSON logs, `DATABASE_URL`, `POSTGRES_PASSWORD`, `CRYPTOATTACK_API_KEY`, and `DASHBOARD_AUTH_TOKEN` as secrets. Do not commit them or paste them into logs, issues, PRs, or screenshots.
+Treat database dumps, Docker volume backups, raw NDJSON logs, `DATABASE_URL`, `POSTGRES_PASSWORD`, `CRYPTOATTACK_API_KEY`, `DASHBOARD_AUTH_TOKEN`, and `DASHBOARD_ADMIN_TOKEN` as secrets. Do not commit them or paste them into logs, issues, PRs, or screenshots.
 
 ## Running Locally
 
@@ -367,9 +371,18 @@ SERVER_PORT=3001
 WEB_ORIGIN=https://your-dashboard.example.com
 DASHBOARD_AUTH_ENABLED=true
 DASHBOARD_AUTH_TOKEN=replace-with-a-long-random-token
+DASHBOARD_ADMIN_TOKEN=replace-with-a-different-long-random-token
+DATABASE_STORAGE_ENABLED=true
+DATABASE_REQUIRED_ON_START=true
+DATABASE_MIGRATIONS_ON_START=false
+PRICE_COLLECTION_ENABLED=true
+SCORES_ENABLED=true
+SCORES_VERSION=flow-v2
 LOG_RAW_EVENTS=true
-RAW_EVENT_LOG_PATH=./data/raw-events.ndjson
+RAW_EVENT_LOG_PATH=/var/lib/cryptoattack/data/raw-events.ndjson
 ```
+
+For the full Ubuntu 24.04 + Caddy + PM2 + local TimescaleDB runbook, use `docs/production-deployment.md`.
 
 ## PM2 Production Option
 
@@ -377,7 +390,7 @@ Install PM2 on the VPS and start the built backend:
 
 ```bash
 pnpm build
-pm2 start "pnpm start" --name cryptoattack-dashboard
+pm2 startOrReload ecosystem.config.cjs --env production
 pm2 save
 pm2 status
 ```
@@ -397,6 +410,7 @@ pm2 stop cryptoattack-dashboard
 - For listings and delistings, a Japan or Tokyo VPS may reduce latency to `https://wss2.cryptoattack.net`.
 - Measure real latency from normalized events using `receivedAt - sourceTime`; the backend exposes latest and average latency in `/api/status`.
 - Run the backend behind Caddy, Nginx, or another reverse proxy if exposing it publicly.
+- `deploy/caddy/Caddyfile.example` contains the recommended Caddy HTTPS proxy.
 - Keep SSE proxy buffering disabled. For Nginx, use `proxy_buffering off` on the `/api/stream` route.
 - Terminate HTTPS at the reverse proxy and forward to the backend on `127.0.0.1:3001`.
 
@@ -452,8 +466,11 @@ Use `/api/backtest/summary`, `/api/backtest/score-buckets`, `/api/backtest/rules
 - `GET /api/spot-performance?exchange=binance&limit=10`
 - `GET /api/binance/open-interest?coin=BTC&period=5m&limit=12`
 - `GET /api/stream`
+- `DELETE /api/storage/events`
+- `DELETE /api/storage/all-data`
 
 Protected API routes require a dashboard token only when `DASHBOARD_AUTH_ENABLED=true`. `/health` remains public for uptime checks.
+Destructive storage reset routes also require `DASHBOARD_ADMIN_TOKEN` through `x-dashboard-admin-token` or `adminToken`.
 
 Score API curl examples:
 
@@ -510,6 +527,7 @@ Raw log write failures are caught and logged as warnings. They do not block in-m
 - The backend redacts API-key-shaped logger fields.
 - React renders event `plainText` and extracts safe `http` or `https` links separately; it does not use `dangerouslySetInnerHTML` for CryptoAttack event HTML.
 - If `DASHBOARD_AUTH_ENABLED=true`, API and SSE requests require `DASHBOARD_AUTH_TOKEN` by query token or `Authorization: Bearer` header where supported.
+- Destructive storage reset routes require the separate `DASHBOARD_ADMIN_TOKEN`; the dashboard hides reset controls until an admin token is entered locally.
 - Query-string SSE tokens can appear in browser history, reverse-proxy logs, and screenshots. Use HTTPS, keep logs private, and rotate tokens if exposed.
 - `VITE_DASHBOARD_AUTH_TOKEN` is for local Vite development only because it is embedded in frontend assets.
 

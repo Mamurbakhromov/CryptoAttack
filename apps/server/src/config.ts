@@ -31,6 +31,7 @@ const integerListFromEnv = z.preprocess((value) => {
 }, z.array(z.number().int().positive()).min(1));
 
 const EnvSchema = z.object({
+  NODE_ENV: z.string().default('development'),
   CRYPTOATTACK_API_KEY: z.string().default(''),
   CRYPTOATTACK_MAIN_URL: z.string().url().default('https://wss.cryptoattack.net'),
   CRYPTOATTACK_FAST_URL: z.string().url().default('https://wss2.cryptoattack.net'),
@@ -48,6 +49,7 @@ const EnvSchema = z.object({
   ENABLE_ANNOUNCEMENT_DELISTING_FALLBACK: booleanFromEnv.default(false),
   DASHBOARD_AUTH_ENABLED: booleanFromEnv.default(false),
   DASHBOARD_AUTH_TOKEN: z.string().default(''),
+  DASHBOARD_ADMIN_TOKEN: z.string().default(''),
   MOCK_EVENT_INTERVAL_MS: integerFromEnv.default(1_000),
   EXCHANGE_SYMBOL_CACHE_ENABLED: booleanFromEnv.default(true),
   EXCHANGE_SYMBOL_CACHE_PATH: z.string().default('./data/exchange-symbols.json'),
@@ -59,6 +61,7 @@ const EnvSchema = z.object({
   DATABASE_SSL: booleanFromEnv.default(false),
   DATABASE_POOL_MAX: integerFromEnv.default(10),
   DATABASE_STORAGE_ENABLED: booleanFromEnv.default(false),
+  DATABASE_REQUIRED_ON_START: booleanFromEnv.default(false),
   DATABASE_MIGRATIONS_ON_START: booleanFromEnv.default(false),
   DATABASE_STATEMENT_TIMEOUT_MS: integerFromEnv.default(5_000),
   DATABASE_WRITE_QUEUE_MAX: integerFromEnv.default(10_000),
@@ -93,8 +96,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     throw new Error('DASHBOARD_AUTH_TOKEN is required when DASHBOARD_AUTH_ENABLED=true');
   }
 
+  if (parsed.NODE_ENV === 'production' && parsed.DASHBOARD_AUTH_ENABLED && !parsed.DASHBOARD_ADMIN_TOKEN) {
+    throw new Error('DASHBOARD_ADMIN_TOKEN is required in production when DASHBOARD_AUTH_ENABLED=true');
+  }
+
   if (parsed.DATABASE_STORAGE_ENABLED) {
     assertValidDatabaseUrl(databaseUrl);
+  }
+
+  if (parsed.DATABASE_REQUIRED_ON_START && !parsed.DATABASE_STORAGE_ENABLED) {
+    throw new Error('DATABASE_STORAGE_ENABLED=true is required when DATABASE_REQUIRED_ON_START=true');
   }
 
   if (parsed.SCORES_ENABLED && !parsed.DATABASE_STORAGE_ENABLED) {
@@ -123,6 +134,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     enableAnnouncementDelistingFallback: parsed.ENABLE_ANNOUNCEMENT_DELISTING_FALLBACK,
     dashboardAuthEnabled: parsed.DASHBOARD_AUTH_ENABLED,
     dashboardAuthToken: parsed.DASHBOARD_AUTH_TOKEN,
+    dashboardAdminToken: parsed.DASHBOARD_ADMIN_TOKEN,
     mockEventIntervalMs: parsed.MOCK_EVENT_INTERVAL_MS,
     exchangeSymbolCacheEnabled: parsed.EXCHANGE_SYMBOL_CACHE_ENABLED,
     exchangeSymbolCachePath: parsed.EXCHANGE_SYMBOL_CACHE_PATH,
@@ -135,6 +147,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       url: parsed.DATABASE_STORAGE_ENABLED ? databaseUrl : null,
       ssl: parsed.DATABASE_SSL,
       poolMax: parsed.DATABASE_POOL_MAX,
+      requiredOnStart: parsed.DATABASE_REQUIRED_ON_START,
       migrationsOnStart: parsed.DATABASE_MIGRATIONS_ON_START,
       statementTimeoutMs: parsed.DATABASE_STATEMENT_TIMEOUT_MS,
       writeQueueMax: parsed.DATABASE_WRITE_QUEUE_MAX,

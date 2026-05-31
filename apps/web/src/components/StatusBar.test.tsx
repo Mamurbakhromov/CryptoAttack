@@ -70,7 +70,7 @@ describe('StatusBar', () => {
   it('asks for confirmation before clearing event data', async () => {
     const user = userEvent.setup();
     const onClearEventData = vi.fn();
-    render(<StatusBarHarness onClearEventData={onClearEventData} />);
+    render(<StatusBarHarness adminUnlocked onClearEventData={onClearEventData} />);
 
     await user.click(screen.getByRole('button', { name: 'Clear events' }));
     expect(screen.getByRole('dialog', { name: 'Confirm clear event data' })).toBeInTheDocument();
@@ -84,7 +84,7 @@ describe('StatusBar', () => {
   it('asks for stronger confirmation before resetting all stored data', async () => {
     const user = userEvent.setup();
     const onResetAllStoredData = vi.fn();
-    render(<StatusBarHarness onResetAllStoredData={onResetAllStoredData} />);
+    render(<StatusBarHarness adminUnlocked onResetAllStoredData={onResetAllStoredData} />);
 
     await user.click(screen.getByRole('button', { name: 'Reset all data' }));
     expect(screen.getByRole('dialog', { name: 'Confirm reset all stored data' })).toBeInTheDocument();
@@ -95,14 +95,35 @@ describe('StatusBar', () => {
     expect(onResetAllStoredData).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('dialog', { name: 'Confirm reset all stored data' })).not.toBeInTheDocument();
   });
+
+  it('hides destructive reset controls until an admin token is stored locally', async () => {
+    const user = userEvent.setup();
+    const onAdminTokenSave = vi.fn();
+    render(<StatusBarHarness onAdminTokenSave={onAdminTokenSave} />);
+
+    expect(screen.queryByRole('button', { name: 'Clear events' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reset all data' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Admin' }));
+    await user.type(screen.getByLabelText('Admin token'), 'admin-secret');
+    await user.click(screen.getByRole('button', { name: 'Unlock admin' }));
+
+    expect(onAdminTokenSave).toHaveBeenCalledWith('admin-secret');
+  });
 });
 
 function StatusBarHarness({
   status = null,
+  adminUnlocked = false,
+  onAdminTokenSave = vi.fn(),
+  onAdminTokenClear = vi.fn(),
   onClearEventData = vi.fn(),
   onResetAllStoredData = vi.fn()
 }: {
   status?: ReturnType<typeof makeStatus> | null;
+  adminUnlocked?: boolean;
+  onAdminTokenSave?: (token: string) => void;
+  onAdminTokenClear?: () => void;
   onClearEventData?: () => void;
   onResetAllStoredData?: () => void;
 }) {
@@ -128,6 +149,7 @@ function StatusBarHarness({
       eventClearMessage={null}
       dataResetState="idle"
       dataResetMessage={null}
+      adminUnlocked={adminUnlocked}
       onTogglePause={vi.fn()}
       onToggleSound={vi.fn()}
       onToggleNotifications={vi.fn()}
@@ -135,6 +157,8 @@ function StatusBarHarness({
       onExchangeFilterChange={setExchangeFilter}
       onMarketFilterChange={setMarketFilter}
       onToggleTheme={vi.fn()}
+      onAdminTokenSave={onAdminTokenSave}
+      onAdminTokenClear={onAdminTokenClear}
       onClearEventData={onClearEventData}
       onResetAllStoredData={onResetAllStoredData}
     />

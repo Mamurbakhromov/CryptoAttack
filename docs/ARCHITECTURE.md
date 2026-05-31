@@ -89,7 +89,7 @@ Socket.IO news payload
 
 ## Deployment Notes
 
-- Run Node.js 20 or newer.
+- Run Node.js 24 or newer.
 - Deploy near CryptoAttack endpoints for lower network latency.
 - Serve behind HTTPS with Caddy, Nginx, Fly, Render, Railway, or similar.
 - Keep `.env` private and never put real API keys in frontend env files.

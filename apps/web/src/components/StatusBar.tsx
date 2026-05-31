@@ -31,6 +31,7 @@ interface StatusBarProps {
   eventClearMessage: string | null;
   dataResetState: 'idle' | 'resetting' | 'success' | 'error';
   dataResetMessage: string | null;
+  adminUnlocked: boolean;
   onTogglePause: () => void;
   onToggleSound: () => void;
   onToggleNotifications: () => void;
@@ -38,15 +39,20 @@ interface StatusBarProps {
   onExchangeFilterChange: (filter: ExchangeFilter) => void;
   onMarketFilterChange: (filter: MarketFilter) => void;
   onToggleTheme: () => void;
+  onAdminTokenSave: (token: string) => void;
+  onAdminTokenClear: () => void;
   onClearEventData: () => void;
   onResetAllStoredData: () => void;
 }
 
 export function StatusBar(props: StatusBarProps) {
   const [classificationMenuOpen, setClassificationMenuOpen] = useState(false);
+  const [adminMenuOpen, setAdminMenuOpen] = useState(false);
+  const [adminTokenInput, setAdminTokenInput] = useState('');
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const classificationMenuRef = useRef<HTMLDivElement | null>(null);
+  const adminMenuRef = useRef<HTMLDivElement | null>(null);
   const clearConfirmRef = useRef<HTMLDivElement | null>(null);
   const resetConfirmRef = useRef<HTMLDivElement | null>(null);
   const main = props.status?.sockets.main;
@@ -64,6 +70,19 @@ export function StatusBar(props: StatusBarProps) {
     document.addEventListener('pointerdown', closeOnOutsidePointerDown);
     return () => document.removeEventListener('pointerdown', closeOnOutsidePointerDown);
   }, [classificationMenuOpen]);
+
+  useEffect(() => {
+    if (!adminMenuOpen) return;
+
+    const closeOnOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && adminMenuRef.current?.contains(target)) return;
+      setAdminMenuOpen(false);
+    };
+
+    document.addEventListener('pointerdown', closeOnOutsidePointerDown);
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointerDown);
+  }, [adminMenuOpen]);
 
   useEffect(() => {
     if (!clearConfirmOpen) return;
@@ -93,8 +112,8 @@ export function StatusBar(props: StatusBarProps) {
 
   return (
     <header className="status-bar sticky top-0 z-20 px-4 py-2 md:px-6">
-      <div className="mx-auto max-w-[1800px] overflow-x-auto">
-        <div className="flex min-w-max items-center gap-2 text-xs font-bold">
+      <div className="mx-auto max-w-[1800px]">
+        <div className="flex flex-wrap items-center gap-2 text-xs font-bold">
           <StatusPill label={`Stream: ${props.streamState}`} tone={props.streamState === 'open' ? 'ok' : 'warn'} />
           <StatusPill label={formatSocketStatus('Main', main)} tone={socketTone(main)} />
           <StatusPill label={formatSocketStatus('Fast', fast)} tone={socketTone(fast)} />
@@ -114,7 +133,66 @@ export function StatusBar(props: StatusBarProps) {
           <button className="control-button" type="button" onClick={props.onToggleNotifications}>
             Notify {props.notificationsEnabled ? 'on' : 'off'}
           </button>
-          <div className="event-clear-control" ref={clearConfirmRef}>
+          <div className="event-clear-control" ref={adminMenuRef}>
+            <button
+              className={`control-button ${props.adminUnlocked ? 'active' : ''}`}
+              type="button"
+              aria-haspopup="dialog"
+              aria-expanded={adminMenuOpen}
+              onClick={() => setAdminMenuOpen((value) => !value)}
+            >
+              {props.adminUnlocked ? 'Admin active' : 'Admin'}
+            </button>
+            {adminMenuOpen ? (
+              <div className="event-clear-confirm admin-token-confirm" role="dialog" aria-label="Admin controls">
+                <strong>{props.adminUnlocked ? 'Admin controls active' : 'Admin token'}</strong>
+                {props.adminUnlocked ? (
+                  <span>Maintenance actions are unlocked in this browser.</span>
+                ) : (
+                  <label className="admin-token-field">
+                    <span>Admin token</span>
+                    <input
+                      type="password"
+                      value={adminTokenInput}
+                      autoComplete="off"
+                      onChange={(event) => setAdminTokenInput(event.currentTarget.value)}
+                    />
+                  </label>
+                )}
+                <div className="event-clear-actions">
+                  <button className="control-button" type="button" onClick={() => setAdminMenuOpen(false)}>
+                    Cancel
+                  </button>
+                  {props.adminUnlocked ? (
+                    <button
+                      className="control-button danger"
+                      type="button"
+                      onClick={() => {
+                        props.onAdminTokenClear();
+                        setAdminMenuOpen(false);
+                      }}
+                    >
+                      Lock admin
+                    </button>
+                  ) : (
+                    <button
+                      className="control-button"
+                      type="button"
+                      onClick={() => {
+                        props.onAdminTokenSave(adminTokenInput);
+                        setAdminTokenInput('');
+                        setAdminMenuOpen(false);
+                      }}
+                    >
+                      Unlock admin
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </div>
+          {props.adminUnlocked ? (
+            <div className="event-clear-control" ref={clearConfirmRef}>
             <button
               className={`control-button event-clear-trigger ${props.eventClearState === 'error' ? 'danger' : ''}`}
               type="button"
@@ -146,13 +224,15 @@ export function StatusBar(props: StatusBarProps) {
                 </div>
               </div>
             ) : null}
-          </div>
+            </div>
+          ) : null}
           {props.eventClearMessage ? (
             <span className={`event-clear-message ${props.eventClearState}`} aria-live="polite">
               {props.eventClearMessage}
             </span>
           ) : null}
-          <div className="event-clear-control" ref={resetConfirmRef}>
+          {props.adminUnlocked ? (
+            <div className="event-clear-control" ref={resetConfirmRef}>
             <button
               className="control-button danger"
               type="button"
@@ -184,7 +264,8 @@ export function StatusBar(props: StatusBarProps) {
                 </div>
               </div>
             ) : null}
-          </div>
+            </div>
+          ) : null}
           {props.dataResetMessage ? (
             <span className={`event-clear-message ${props.dataResetState === 'resetting' ? 'idle' : props.dataResetState}`} aria-live="polite">
               {props.dataResetMessage}

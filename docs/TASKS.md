@@ -3,7 +3,7 @@
 ## Coordinator Assessment
 
 - Repository is not empty and already uses a compatible `pnpm` workspace.
-- Root package is `cryptoattack-realtime-dashboard` with Node.js `>=20` and scripts for `dev`, `build`, `start`, `test`, `typecheck`, and `lint`.
+- Root package is `cryptoattack-realtime-dashboard` with Node.js `>=24` and scripts for `dev`, `build`, `start`, `test`, `typecheck`, and `lint`.
 - Backend app is `apps/server` using Fastify, Socket.IO client, Pino, Zod, TypeScript, and Vitest.
 - Frontend app is `apps/web` using Vite, React, TypeScript, Tailwind CSS, and Vitest.
 - `.env` is ignored by git, and `.env.example` contains placeholders only.

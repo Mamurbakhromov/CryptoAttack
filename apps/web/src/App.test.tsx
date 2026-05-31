@@ -59,14 +59,23 @@ vi.mock('./components/StatusBar', () => ({
   StatusBar: (props: {
     queuedCount: number;
     streamState: string;
+    adminUnlocked: boolean;
     onTogglePause: () => void;
+    onAdminTokenSave: (token: string) => void;
+    onAdminTokenClear: () => void;
     onClearEventData: () => void;
     onResetAllStoredData: () => void;
   }) => (
     <div>
       <button type="button" onClick={props.onTogglePause}>toggle-pause</button>
-      <button type="button" onClick={props.onClearEventData}>clear-events</button>
-      <button type="button" onClick={props.onResetAllStoredData}>reset-all-data</button>
+      <button type="button" onClick={() => props.onAdminTokenSave('admin-secret')}>unlock-admin</button>
+      <button type="button" onClick={props.onAdminTokenClear}>lock-admin</button>
+      {props.adminUnlocked ? (
+        <>
+          <button type="button" onClick={props.onClearEventData}>clear-events</button>
+          <button type="button" onClick={props.onResetAllStoredData}>reset-all-data</button>
+        </>
+      ) : null}
       <span data-testid="queued-count">{props.queuedCount}</span>
       <span data-testid="stream-state">{props.streamState}</span>
     </div>
@@ -158,6 +167,7 @@ describe('App', () => {
 
   it('clears visible event data after the header action succeeds', async () => {
     const user = userEvent.setup();
+    window.localStorage.setItem('cryptoattack.dashboardAdminToken', 'admin-secret');
     apiMocks.fetchDashboardSnapshot.mockResolvedValue(makeSnapshot({
       listings: [makeEvent('listings', { id: 'listing-1', title: 'Listing 1' })]
     }));
@@ -172,11 +182,12 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: 'clear-events' }));
 
     await waitFor(() => expect(screen.getByTestId('listings-count')).toHaveTextContent('0'));
-    expect(apiMocks.clearEventData).toHaveBeenCalledTimes(1);
+    expect(apiMocks.clearEventData).toHaveBeenCalledWith(null, 'admin-secret');
   });
 
   it('resets visible event and score state after the full reset action succeeds', async () => {
     const user = userEvent.setup();
+    window.localStorage.setItem('cryptoattack.dashboardAdminToken', 'admin-secret');
     apiMocks.fetchDashboardSnapshot.mockResolvedValue(makeSnapshot({
       listings: [makeEvent('listings', { id: 'listing-2', title: 'Listing 2' })]
     }));
@@ -191,7 +202,20 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: 'reset-all-data' }));
 
     await waitFor(() => expect(screen.getByTestId('listings-count')).toHaveTextContent('0'));
-    expect(apiMocks.resetAllStoredData).toHaveBeenCalledTimes(1);
+    expect(apiMocks.resetAllStoredData).toHaveBeenCalledWith(null, 'admin-secret');
+  });
+
+  it('keeps destructive header actions hidden until an admin token is saved locally', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByTestId('listings-count')).toHaveTextContent('0'));
+    expect(screen.queryByRole('button', { name: 'clear-events' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'unlock-admin' }));
+
+    expect(screen.getByRole('button', { name: 'clear-events' })).toBeInTheDocument();
+    expect(window.localStorage.getItem('cryptoattack.dashboardAdminToken')).toBe('admin-secret');
   });
 
   it('renders the dedicated coin history route through the manual router', async () => {

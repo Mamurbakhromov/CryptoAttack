@@ -214,6 +214,15 @@ export async function registerHttpRoutes(app: FastifyInstance, deps: RouteDeps):
     await reply.code(401).send({ error: 'Unauthorized' });
   };
 
+  const requireAdminAuth = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!isAuthorized(request, deps.config)) {
+      await reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+    if (isAdminAuthorized(request, deps.config)) return;
+    await reply.code(403).send({ error: 'Forbidden', reason: 'admin_token_required' });
+  };
+
   const getStorageStatus = () => deps.getStorageStatus?.() ?? disabledDurableIngestionStatus();
   const getWorkerStatus = () => deps.getWorkerStatus?.() ?? {
     priceCollection: disabledWorkerStatus(deps.config.priceCollection.intervalMs),
@@ -251,7 +260,7 @@ export async function registerHttpRoutes(app: FastifyInstance, deps: RouteDeps):
 
   app.get('/api/storage/status', { preHandler: requireAuth }, async () => buildStorageStatusResponse(deps, getStorageStatus(), getWorkerStatus()));
 
-  app.delete('/api/storage/events', { preHandler: requireAuth }, async (_request, reply) => {
+  app.delete('/api/storage/events', { preHandler: requireAdminAuth }, async (_request, reply) => {
     const storage = getStorageStatus();
     if (storage.queueDepth > 0 || storage.inFlight > 0) {
       return reply.code(409).send({
@@ -293,7 +302,7 @@ export async function registerHttpRoutes(app: FastifyInstance, deps: RouteDeps):
     };
   });
 
-  app.delete('/api/storage/all-data', { preHandler: requireAuth }, async (_request, reply) => {
+  app.delete('/api/storage/all-data', { preHandler: requireAdminAuth }, async (_request, reply) => {
     const storage = getStorageStatus();
     const workers = getWorkerStatus();
     const busy = getFullResetBusyState(storage, workers);
@@ -1075,9 +1084,15 @@ function isAuthorized(request: FastifyRequest, config: AppConfig): boolean {
   return token === null ? false : safeTokenEqual(token, config.dashboardAuthToken);
 }
 
-function getQueryToken(query: unknown): string | null {
+function isAdminAuthorized(request: FastifyRequest, config: AppConfig): boolean {
+  if (!config.dashboardAdminToken) return false;
+  const adminToken = getQueryToken(request.query, 'adminToken') ?? getSingleHeader(request.headers['x-dashboard-admin-token']);
+  return adminToken === null ? false : safeTokenEqual(adminToken, config.dashboardAdminToken);
+}
+
+function getQueryToken(query: unknown, field = 'token'): string | null {
   if (!query || typeof query !== 'object') return null;
-  const token = (query as Record<string, unknown>).token;
+  const token = (query as Record<string, unknown>)[field];
   return typeof token === 'string' && token ? token : null;
 }
 

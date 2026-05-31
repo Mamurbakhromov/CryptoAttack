@@ -77,6 +77,9 @@ if (postgresPool) {
     await closePostgresPool(postgresPool).catch((closeError) => {
       logger.warn({ error: closeError instanceof Error ? closeError.message : String(closeError) }, 'Failed to close unavailable database pool');
     });
+    if (config.database.requiredOnStart) {
+      throw new Error('Database storage is required on startup but Postgres was unavailable');
+    }
     postgresPool = null;
   }
 } else {

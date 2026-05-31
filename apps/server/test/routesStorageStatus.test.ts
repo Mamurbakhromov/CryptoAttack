@@ -57,7 +57,7 @@ describe('storage status routes', () => {
       getDatabaseHealth: async () => databaseHealth
     }));
 
-    const response = await app.inject({ method: 'DELETE', url: '/api/storage/events' });
+    const response = await app.inject({ method: 'DELETE', url: '/api/storage/events', headers: adminHeaders() });
     const body = response.json();
 
     expect(response.statusCode).toBe(200);
@@ -79,7 +79,7 @@ describe('storage status routes', () => {
     const sseHub = { handleStream: vi.fn(), broadcastSnapshot: vi.fn(), broadcastStorageStatus: vi.fn(), broadcastScoreSnapshot: vi.fn() };
     const app = Fastify({ logger: false });
     await registerHttpRoutes(app, makeDeps({
-      config: loadConfig({ LOG_RAW_EVENTS: 'false' }),
+      config: loadConfig({ DASHBOARD_ADMIN_TOKEN: 'admin-secret', LOG_RAW_EVENTS: 'false' }),
       store,
       sseHub,
       eventMaintenance: { clearEventData, clearAllStoredData },
@@ -88,7 +88,7 @@ describe('storage status routes', () => {
       getDatabaseHealth: async () => databaseHealth
     }));
 
-    const response = await app.inject({ method: 'DELETE', url: '/api/storage/all-data' });
+    const response = await app.inject({ method: 'DELETE', url: '/api/storage/all-data', headers: adminHeaders() });
     const body = response.json();
 
     expect(response.statusCode).toBe(200);
@@ -113,7 +113,7 @@ describe('storage status routes', () => {
       getStorageStatus: () => ({ ...enabledStatus, queueDepth: 1, inFlight: 0 })
     }));
 
-    const response = await app.inject({ method: 'DELETE', url: '/api/storage/events' });
+    const response = await app.inject({ method: 'DELETE', url: '/api/storage/events', headers: adminHeaders() });
     const body = response.json();
 
     expect(response.statusCode).toBe(409);
@@ -136,12 +136,53 @@ describe('storage status routes', () => {
       })
     }));
 
-    const response = await app.inject({ method: 'DELETE', url: '/api/storage/all-data' });
+    const response = await app.inject({ method: 'DELETE', url: '/api/storage/all-data', headers: adminHeaders() });
     const body = response.json();
 
     expect(response.statusCode).toBe(409);
     expect(body.reason).toBe('score_worker_running');
     expect(clearAllStoredData).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('requires a separate admin token for destructive storage routes', async () => {
+    const clearEventData = vi.fn().mockResolvedValue({ clearedAt: '2026-01-01T00:00:05.000Z', tables: [] });
+    const clearAllStoredData = vi.fn();
+    const app = Fastify({ logger: false });
+    await registerHttpRoutes(app, makeDeps({
+      config: loadConfig({
+        DASHBOARD_AUTH_ENABLED: 'true',
+        DASHBOARD_AUTH_TOKEN: 'dashboard-secret',
+        DASHBOARD_ADMIN_TOKEN: 'admin-secret'
+      }),
+      eventMaintenance: { clearEventData, clearAllStoredData },
+      getStorageStatus: () => ({ ...enabledStatus, queueDepth: 0, inFlight: 0 })
+    }));
+
+    const readResponse = await app.inject({
+      method: 'GET',
+      url: '/api/storage/status',
+      headers: { authorization: 'Bearer dashboard-secret' }
+    });
+    const dashboardDeleteResponse = await app.inject({
+      method: 'DELETE',
+      url: '/api/storage/events',
+      headers: { authorization: 'Bearer dashboard-secret' }
+    });
+    const adminDeleteResponse = await app.inject({
+      method: 'DELETE',
+      url: '/api/storage/events',
+      headers: {
+        authorization: 'Bearer dashboard-secret',
+        'x-dashboard-admin-token': 'admin-secret'
+      }
+    });
+
+    expect(readResponse.statusCode).toBe(200);
+    expect(dashboardDeleteResponse.statusCode).toBe(403);
+    expect(dashboardDeleteResponse.json()).toMatchObject({ error: 'Forbidden', reason: 'admin_token_required' });
+    expect(adminDeleteResponse.statusCode).toBe(200);
+    expect(clearEventData).toHaveBeenCalledTimes(1);
     await app.close();
   });
 });
@@ -191,13 +232,17 @@ function makeDeps(overrides: {
   getDatabaseHealth?: () => Promise<DatabaseHealthSnapshot>;
 } = {}) {
   return {
-    config: loadConfig({}),
+    config: loadConfig({ DASHBOARD_ADMIN_TOKEN: 'admin-secret' }),
     store: new EventStore({ bufferSize: 10, dedupeTtlMs: 60_000, mockMode: true, authEnabled: false }),
     sseHub: { handleStream: vi.fn(), broadcastSnapshot: vi.fn(), broadcastStorageStatus: vi.fn(), broadcastScoreSnapshot: vi.fn() },
     symbolCache: { getSymbols: vi.fn(), refresh: vi.fn() },
     spotPerformance: { getPerformance: vi.fn() },
     ...overrides
   } as never;
+}
+
+function adminHeaders() {
+  return { 'x-dashboard-admin-token': 'admin-secret' };
 }
 
 function workerStatus() {

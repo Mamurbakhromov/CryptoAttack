@@ -81,6 +81,7 @@ export default function App() {
   const [soundEnabled, setSoundEnabled] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [authToken] = useState(() => getDashboardToken());
+  const [adminToken, setAdminToken] = useState(() => getDashboardAdminToken());
   const [apiError, setApiError] = useState<string | null>(null);
   const [page, setPage] = useState<DashboardPage>(() => getDashboardPage());
   const [routeLocation, setRouteLocation] = useState(() => `${window.location.pathname}${window.location.search}`);
@@ -245,10 +246,15 @@ export default function App() {
   };
 
   const handleClearEventData = async () => {
+    if (!adminToken) {
+      setEventClearState('error');
+      setEventClearMessage('Admin token required');
+      return;
+    }
     setEventClearState('clearing');
     setEventClearMessage(null);
     try {
-      const response = await clearEventData(authToken);
+      const response = await clearEventData(authToken, adminToken);
       queuedEventsRef.current = [];
       setQueuedCount(0);
       setHighlightedIds(new Set());
@@ -267,10 +273,15 @@ export default function App() {
   };
 
   const handleResetAllStoredData = async () => {
+    if (!adminToken) {
+      setDataResetState('error');
+      setDataResetMessage('Admin token required');
+      return;
+    }
     setDataResetState('resetting');
     setDataResetMessage(null);
     try {
-      const response = await resetAllStoredData(authToken);
+      const response = await resetAllStoredData(authToken, adminToken);
       queuedEventsRef.current = [];
       setQueuedCount(0);
       setHighlightedIds(new Set());
@@ -301,6 +312,20 @@ export default function App() {
     }, 1_100);
   };
 
+  const saveAdminToken = (token: string) => {
+    const trimmed = token.trim();
+    if (!trimmed) return;
+    window.localStorage.setItem('cryptoattack.dashboardAdminToken', trimmed);
+    setAdminToken(trimmed);
+    setEventClearMessage(null);
+    setDataResetMessage(null);
+  };
+
+  const clearAdminToken = () => {
+    window.localStorage.removeItem('cryptoattack.dashboardAdminToken');
+    setAdminToken(null);
+  };
+
   return (
     <div className={`app-shell theme-${theme}`}>
       <StatusBar
@@ -320,6 +345,7 @@ export default function App() {
         eventClearMessage={eventClearMessage}
         dataResetState={dataResetState}
         dataResetMessage={dataResetMessage}
+        adminUnlocked={Boolean(adminToken)}
         onTogglePause={togglePause}
         onToggleSound={() => setSoundEnabled((value) => !value)}
         onToggleNotifications={() => void toggleNotifications()}
@@ -327,6 +353,8 @@ export default function App() {
         onExchangeFilterChange={setExchangeFilter}
         onMarketFilterChange={setMarketFilter}
         onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
+        onAdminTokenSave={saveAdminToken}
+        onAdminTokenClear={clearAdminToken}
         onClearEventData={() => void handleClearEventData()}
         onResetAllStoredData={() => void handleResetAllStoredData()}
       />
@@ -616,6 +644,10 @@ function getDashboardToken(): string | null {
   const tokenFromEnv = getEnvDashboardAuthToken();
   if (tokenFromEnv) return tokenFromEnv;
   return window.localStorage.getItem('cryptoattack.dashboardToken');
+}
+
+function getDashboardAdminToken(): string | null {
+  return window.localStorage.getItem('cryptoattack.dashboardAdminToken');
 }
 
 function getDashboardPage(): DashboardPage {

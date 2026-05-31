@@ -61,12 +61,18 @@ export async function fetchDashboardStatus(token: string | null, signal?: AbortS
   return fetchJson<ApiStatus>('/api/status', token, signal);
 }
 
-export async function clearEventData(token: string | null, signal?: AbortSignal): Promise<ClearEventDataResponse> {
-  return fetchJson<ClearEventDataResponse>('/api/storage/events', token, signal, { method: 'DELETE' });
+export async function clearEventData(token: string | null, adminToken: string | null, signal?: AbortSignal): Promise<ClearEventDataResponse> {
+  return fetchJson<ClearEventDataResponse>('/api/storage/events', token, signal, {
+    method: 'DELETE',
+    headers: adminHeaders(adminToken)
+  });
 }
 
-export async function resetAllStoredData(token: string | null, signal?: AbortSignal): Promise<ResetAllStoredDataResponse> {
-  return fetchJson<ResetAllStoredDataResponse>('/api/storage/all-data', token, signal, { method: 'DELETE' });
+export async function resetAllStoredData(token: string | null, adminToken: string | null, signal?: AbortSignal): Promise<ResetAllStoredDataResponse> {
+  return fetchJson<ResetAllStoredDataResponse>('/api/storage/all-data', token, signal, {
+    method: 'DELETE',
+    headers: adminHeaders(adminToken)
+  });
 }
 
 export async function fetchExchangeSymbols(token: string | null, query: ExchangeSymbolsQuery, signal?: AbortSignal): Promise<ExchangeSymbolsResponse> {
@@ -202,7 +208,12 @@ function scoreQuerySuffix(query: ScoreListQuery): string {
 
 async function fetchJson<T>(path: string, token: string | null, signal?: AbortSignal, init: RequestInit = {}): Promise<T> {
   if (signal) init.signal = signal;
-  if (token) init.headers = { Authorization: `Bearer ${token}` };
+  if (token) {
+    init.headers = {
+      ...headersToRecord(init.headers),
+      Authorization: `Bearer ${token}`
+    };
+  }
 
   const response = await fetch(buildApiUrl(path), init);
 
@@ -219,4 +230,15 @@ async function fetchJson<T>(path: string, token: string | null, signal?: AbortSi
   }
 
   return (await response.json()) as T;
+}
+
+function adminHeaders(adminToken: string | null): Record<string, string> {
+  return adminToken ? { 'x-dashboard-admin-token': adminToken } : {};
+}
+
+function headersToRecord(headers: HeadersInit | undefined): Record<string, string> {
+  if (!headers) return {};
+  if (headers instanceof Headers) return Object.fromEntries(headers.entries());
+  if (Array.isArray(headers)) return Object.fromEntries(headers);
+  return headers;
 }

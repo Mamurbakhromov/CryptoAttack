@@ -901,7 +901,7 @@ Add a local compose service when implementation starts:
 ```yaml
 services:
   postgres:
-    image: timescale/timescaledb:latest-pg16
+    image: timescale/timescaledb:2.27.1-pg16
     ports:
       - "5432:5432"
     environment:

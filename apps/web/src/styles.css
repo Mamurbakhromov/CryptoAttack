@@ -396,6 +396,35 @@ a {
   border-color: rgba(248, 113, 113, 0.58);
 }
 
+.admin-token-confirm {
+  border-color: rgba(52, 211, 153, 0.46);
+}
+
+.admin-token-confirm strong {
+  color: #bbf7d0;
+}
+
+.admin-token-field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.admin-token-field input {
+  min-width: 0;
+  border: 1px solid var(--control-border);
+  border-radius: 0.55rem;
+  background: rgba(2, 6, 23, 0.72);
+  padding: 0.45rem 0.55rem;
+  color: #e2e8f0;
+  font-weight: 800;
+  outline: none;
+}
+
+.admin-token-field input:focus {
+  border-color: rgba(52, 211, 153, 0.72);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
+}
+
 .event-clear-actions {
   display: flex;
   justify-content: flex-end;

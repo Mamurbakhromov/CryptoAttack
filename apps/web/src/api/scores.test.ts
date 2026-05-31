@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { fetchScoreDetail, fetchScoreEvidence, fetchScoreMarketRegime, fetchScoresCurrent, fetchScoresTop, fetchScoreTimeline } from './sse';
+import { clearEventData, fetchScoreDetail, fetchScoreEvidence, fetchScoreMarketRegime, fetchScoresCurrent, fetchScoresTop, fetchScoreTimeline } from './sse';
 import { makeScoreDetailResponse, makeScoreEvidenceResponse, makeScoreMarketRegimeResponse, makeScoresListResponse, makeScoreTimelineResponse } from '../test/scoreBuilders';
 
 describe('score API client functions', () => {
@@ -43,6 +43,21 @@ describe('score API client functions', () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) })));
 
     await expect(fetchScoresTop(null, { side: 'bear' })).rejects.toThrow('Request /api/scores/top?side=bear failed with 503');
+  });
+
+  it('sends dashboard and admin tokens separately for destructive maintenance calls', async () => {
+    await clearEventData('dashboard-token', 'admin-token');
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.objectContaining({ pathname: '/api/storage/events' }),
+      expect.objectContaining({
+        method: 'DELETE',
+        headers: {
+          Authorization: 'Bearer dashboard-token',
+          'x-dashboard-admin-token': 'admin-token'
+        }
+      })
+    );
   });
 });
 

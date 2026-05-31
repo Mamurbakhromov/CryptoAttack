@@ -11,6 +11,7 @@ describe('loadConfig database settings', () => {
       url: null,
       ssl: false,
       poolMax: 10,
+      requiredOnStart: false,
       migrationsOnStart: false,
       statementTimeoutMs: 5_000,
       writeQueueMax: 10_000,
@@ -71,6 +72,7 @@ describe('loadConfig database settings', () => {
       DATABASE_URL: 'postgres://user:secret@localhost:5432/cryptoattack',
       DATABASE_SSL: 'true',
       DATABASE_POOL_MAX: '7',
+      DATABASE_REQUIRED_ON_START: 'true',
       DATABASE_MIGRATIONS_ON_START: 'true',
       DATABASE_STATEMENT_TIMEOUT_MS: '9000',
       DATABASE_WRITE_QUEUE_MAX: '25',
@@ -100,6 +102,7 @@ describe('loadConfig database settings', () => {
       url: 'postgres://user:secret@localhost:5432/cryptoattack',
       ssl: true,
       poolMax: 7,
+      requiredOnStart: true,
       migrationsOnStart: true,
       statementTimeoutMs: 9_000,
       writeQueueMax: 25,
@@ -135,6 +138,16 @@ describe('loadConfig database settings', () => {
 
   it('requires database storage when scores are enabled', () => {
     expect(() => loadConfig({ SCORES_ENABLED: 'true' })).toThrow('DATABASE_STORAGE_ENABLED=true is required when SCORES_ENABLED=true');
+  });
+
+  it('requires database storage when production startup requires database availability', () => {
+    expect(() => loadConfig({ DATABASE_REQUIRED_ON_START: 'true' })).toThrow('DATABASE_STORAGE_ENABLED=true is required when DATABASE_REQUIRED_ON_START=true');
+  });
+
+  it('requires a separate admin token for production dashboard auth', () => {
+    expect(() => loadConfig({ NODE_ENV: 'production', DASHBOARD_AUTH_ENABLED: 'true', DASHBOARD_AUTH_TOKEN: 'dashboard-secret' })).toThrow(
+      'DASHBOARD_ADMIN_TOKEN is required in production when DASHBOARD_AUTH_ENABLED=true'
+    );
   });
 
   it('rejects unsafe retention windows', () => {
