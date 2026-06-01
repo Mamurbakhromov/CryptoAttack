@@ -1,0 +1,48 @@
+# =====================================================================
+# systemd unit — CryptoAttack Realtime Dashboard backend
+#
+# Joylash (VM da):
+#   sudo cp deploy/cryptoattack-dashboard.service \
+#           /etc/systemd/system/cryptoattack-dashboard.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now cryptoattack-dashboard
+#
+# Loglar:        journalctl -u cryptoattack-dashboard -f
+# Qayta ishga:   sudo systemctl restart cryptoattack-dashboard
+#
+# ESLATMA:
+#  - WorkingDirectory apps/server bo'lishi shart: server statik frontendni
+#    `../web/dist` dan, .env ni esa `../../.env` (repo ildizi) dan oladi.
+#  - User= va yo'llar sizning o'rnatishingizga mos bo'lsin.
+#  - node yo'lini tekshiring: `which node` (odatda /usr/bin/node).
+# =====================================================================
+
+[Unit]
+Description=CryptoAttack Realtime Dashboard
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=cryptoattack
+Group=cryptoattack
+WorkingDirectory=/opt/cryptoattack/apps/server
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node dist/src/index.js
+Restart=on-failure
+RestartSec=5
+# Toza o'chirish uchun (SIGTERM ni server ushlaydi):
+KillSignal=SIGTERM
+TimeoutStopSec=20
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cryptoattack
+
+# Xavfsizlik (ixtiyoriy, lekin tavsiya etiladi):
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
